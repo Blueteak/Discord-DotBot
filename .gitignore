@@ -28,3 +28,6 @@ __pycache__/
 # Python package metadata
 *.egg-info/
 *.pyc
+
+# Independently versioned private Sites experiment
+/experiments/sites-probe/

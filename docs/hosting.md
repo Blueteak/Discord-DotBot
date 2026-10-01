@@ -2,6 +2,8 @@
 
 Use an always-on Linux or macOS host with durable storage. Python 3.9+ is supported; use a maintained Python release for a new host. Dot can install this project on a host it has access to, but its disposable cloud workspace must not be the only copy of the queue.
 
+See the [Sites capability test](sites-probe.md) for the managed-hosting experiment. Sites passed storage and outbound Discord handshake checks, but request-scoped background work stopped before 40 seconds.
+
 ## Run the relay
 
 Follow the [README installation steps](../README.md#relay-installation). Run `dotbot run` under your host's process supervisor. All commands must use the same data directory. Set `DOTBOT_DATA_DIR` to an absolute path if commands run from different working directories.

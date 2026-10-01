@@ -18,6 +18,7 @@ Discord user <-> Discord bot <-> Persistent relay host <-> MCP tools/events <-> 
 
 - One deployment connects one owner's Discord bot and Dot.
 - The owner chooses the servers, channels, and people allowed to use it.
+- Dot can follow conversations in enabled channels and contribute when useful, without requiring a mention. An @mention signals a direct request.
 - Requests and replies stay associated with their original conversation.
 - Credentials and relay state remain in the owner's deployment.
 
@@ -25,7 +26,7 @@ Discord user <-> Discord bot <-> Persistent relay host <-> MCP tools/events <-> 
 
 Prove one complete exchange: the owner sends a message in one permitted Discord channel, their existing Dot reads it through the local relay, and the bot posts the Dot's reply back to that conversation.
 
-See [the development plan](docs/development.md) for the next steps and unresolved integration details.
+See [the development plan](docs/development.md) for the next steps and unresolved integration details. The [Sites experiment](docs/sites-probe.md) records hosting results and setup friction, including roughly five plugin approval steps reported during the first connection.
 
 ## Discord setup
 
@@ -84,7 +85,7 @@ Start the Discord relay:
 .venv/bin/dotbot run
 ```
 
-Mention your bot with a text message in the allowed channel. Only your configured user can queue requests. No privileged Discord intents are required. DMs, attachments, and slash commands are not implemented yet.
+The current tracer bullet still requires a mention; contextual channel participation is planned. Mention your bot with a text message in the allowed channel. Only your configured user can queue requests. No privileged Discord intents are required. DMs, attachments, and slash commands are not implemented yet.
 
 In another terminal on the same host:
 
