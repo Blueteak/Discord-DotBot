@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "discord-dotbot"
+version = "0.1.0"
+description = "A local Discord inbox and reply relay for your Dot"
+requires-python = ">=3.9"
+dependencies = ["discord.py==2.6.4", "aiohttp==3.13.5", "PyJWT[crypto]==2.10.1"]
+
+[project.scripts]
+dotbot = "dotbot.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["dotbot*"]

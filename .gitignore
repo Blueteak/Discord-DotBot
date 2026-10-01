@@ -24,3 +24,7 @@ __pycache__/
 .DS_Store
 .idea/
 .vscode/
+
+# Python package metadata
+*.egg-info/
+*.pyc

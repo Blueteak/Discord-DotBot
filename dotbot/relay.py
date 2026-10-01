@@ -1,0 +1,139 @@
+import asyncio
+import contextlib
+import fcntl
+import logging
+import time
+
+import discord
+
+from .config import allowed
+
+log = logging.getLogger("dotbot")
+
+
+class Relay(discord.Client):
+    def __init__(self, config, store):
+        super().__init__(intents=discord.Intents(guilds=True, guild_messages=True),
+                         allowed_mentions=discord.AllowedMentions.none(), max_messages=None)
+        self.config = config
+        self.store = store
+        self.worker = None
+
+    async def setup_hook(self):
+        self.worker = asyncio.create_task(self.deliver())
+        def worker_done(task):
+            if not task.cancelled() and task.exception():
+                log.error("Reply worker stopped; exiting relay.")
+                asyncio.create_task(self.close())
+        self.worker.add_done_callback(worker_done)
+
+    async def on_ready(self):
+        self.store.heartbeat(True)
+        log.info("Connected as %s", self.user)
+
+    async def on_disconnect(self):
+        self.store.heartbeat(False)
+
+    async def on_message(self, message):
+        if not allowed(self.config, message.author.id, message.guild.id if message.guild else None,
+                       message.channel.id, message.author.bot, bool(message.webhook_id)):
+            return
+        # Require a literal mention on every request, including in threads.
+        # This works without Discord's privileged Message Content intent.
+        if not self.user or not any(user.id == self.user.id for user in message.mentions):
+            return
+        content = message.content.replace(f"<@{self.user.id}>", "").replace(f"<@!{self.user.id}>", "").strip()
+        if not content:
+            return
+        if self.store.receive({"id": str(message.id), "guild_id": str(message.guild.id),
+                               "channel_id": str(message.channel.id), "author_id": str(message.author.id),
+                               "content": content, "received_at": time.time()}):
+            log.info("Queued request %s", message.id)
+
+    async def send_request(self, request):
+        if not allowed(self.config, request["author_id"], request["guild_id"], request["channel_id"]):
+            self.store.finish(request["id"], "failed", error="Destination no longer permitted by configuration.")
+            return
+        try:
+            channel = self.get_channel(int(request["channel_id"])) or await self.fetch_channel(int(request["channel_id"]))
+            if str(getattr(getattr(channel, "guild", None), "id", None)) != request["guild_id"]:
+                self.store.finish(request["id"], "failed", error="Channel does not belong to the stored server.")
+                return
+            reference = discord.MessageReference(message_id=int(request["id"]),
+                channel_id=int(request["channel_id"]), guild_id=int(request["guild_id"]), fail_if_not_exists=True)
+            sent = await channel.send(request["reply"], reference=reference, nonce=request["id"],
+                                      allowed_mentions=discord.AllowedMentions.none())
+        except (discord.Forbidden, discord.NotFound):
+            self.store.finish(request["id"], "failed", error="Discord denied access, or the channel/original message was deleted.")
+        except Exception as exc:
+            # A network failure can happen after Discord accepted the message.
+            # Do not blindly resend on the next tick or restart.
+            self.store.finish(request["id"], "uncertain", error=f"Delivery not confirmed ({type(exc).__name__}). Check Discord before retrying.")
+        else:
+            self.store.finish(request["id"], "sent", reply_id=str(sent.id))
+            log.info("Delivered reply for %s", request["id"])
+
+    async def deliver(self):
+        while not self.is_closed():
+            self.store.heartbeat(self.is_ready())
+            if self.is_ready():
+                request = self.store.claim()
+                if request:
+                    await self.send_request(request)
+            await asyncio.sleep(1)
+
+    async def close(self):
+        if self.worker:
+            self.worker.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self.worker
+        self.store.heartbeat(False)
+        await super().close()
+
+
+def run(config, store, directory, token, serve=None):
+    # OS lock releases on exit, including a crash. Only one relay per data folder.
+    with (directory / "relay.lock").open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError("A relay is already running for this data directory.") from None
+        store.recover()
+        client = Relay(config, store)
+        async def start():
+            runner = None
+            worker = None
+            if serve:
+                from aiohttp import web
+                from .events import Events
+                from .mcp import Auth, make_app
+                if serve.dev and serve.host != "127.0.0.1":
+                    raise ValueError("Development MCP authentication is restricted to 127.0.0.1.")
+                auth = Auth(directory, dev=serve.dev)
+                if serve.dev:
+                    auth.resource = f"http://127.0.0.1:{serve.port}/mcp"
+                events = Events(store, config, auth.principal)
+                runner = web.AppRunner(make_app(config, store, events, auth), access_log=None)
+                await runner.setup()
+                await web.TCPSite(runner, serve.host, serve.port).start()
+                worker = asyncio.create_task(events.run())
+                log.info("MCP endpoint listening on %s:%s/mcp", serve.host, serve.port)
+            try:
+                async with client:
+                    discord_task = asyncio.create_task(client.start(token))
+                    tasks = [discord_task] + ([worker] if worker else [])
+                    # If either worker dies, stop so the process supervisor can restart it.
+                    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                    for task in pending:
+                        task.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+                    for task in done:
+                        task.result()
+            finally:
+                if worker:
+                    worker.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await worker
+                if runner:
+                    await runner.cleanup()
+        asyncio.run(start())
