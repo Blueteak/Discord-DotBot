@@ -38,6 +38,8 @@ Save it somewhere safe for use later on - this is a secret key, so be careful wi
 
 On the **Bot** page, enable **Message Content Intent** under **Privileged Gateway Intents** and save. This lets the relay read ordinary messages in the channels you enable, even without a mention. Large or verified apps may need Discord approval for this intent.
 
+This toggle is separate from the **Bot Permissions** checklist farther down the page. If you are looking at permission checkboxes, scroll up to **Privileged Gateway Intents**. After enabling the intent, restart the relay if it previously failed to connect.
+
 For a mentions-only relay, leave it off and use `dotbot setup --listen mentions`.
 
 ### 4. Configure installation
