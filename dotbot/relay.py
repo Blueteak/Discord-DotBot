@@ -81,8 +81,7 @@ class Relay(discord.Client):
                 self.on_received()
 
     def start_typing(self, request):
-        # A successful callback confirms receipt, not that Dot has begun thinking.
-        # Give immediate feedback without making a Dot tool call a prerequisite.
+        # Only Dot's explicit intent to reply starts the visible indicator.
         channel_id = request["channel_id"]
         requests = self.typing_requests.setdefault(channel_id, {})
         requests.setdefault(request["id"], time.monotonic() + 120)
@@ -188,9 +187,9 @@ def run(config, store, directory, token, serve=None):
                 auth = Auth(directory, dev=serve.dev, local=serve.local)
                 if serve.dev or serve.local:
                     auth.resource = f"http://127.0.0.1:{serve.port}/mcp"
-                events = Events(store, config, auth.principal, on_delivered=client.start_typing)
+                events = Events(store, config, auth.principal)
                 client.on_received = events.wake
-                runner = web.AppRunner(make_app(config, store, events, auth), access_log=None)
+                runner = web.AppRunner(make_app(config, store, events, auth, begin_reply=client.start_typing), access_log=None)
                 await runner.setup()
                 await web.TCPSite(runner, serve.host, serve.port).start()
                 worker = asyncio.create_task(events.run())

@@ -103,7 +103,8 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
     async def test_local_mcp_context_skip_and_origin_boundary(self):
         auth = Auth(self.path, local=True)
         events = Events(self.store, SETTINGS, auth.principal)
-        client = TestClient(TestServer(make_app(SETTINGS, self.store, events, auth)))
+        typing = Mock()
+        client = TestClient(TestServer(make_app(SETTINGS, self.store, events, auth, begin_reply=typing)))
         try:
             await client.start_server()
             self.store.receive(message())
@@ -118,8 +119,18 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await rpc("skip", "https://untrusted.example")).status, 403)
             response = await rpc("get_context")
             self.assertEqual(len((await response.json())["result"]["structuredContent"]["messages"]), 1)
+            typing.assert_not_called()
+            response = await rpc("begin_reply")
+            started = (await response.json())["result"]["structuredContent"]["reply_started_at"]
+            self.assertIsNotNone(started)
+            typing.assert_called_once()
+            response = await rpc("begin_reply")
+            self.assertEqual((await response.json())["result"]["structuredContent"]["reply_started_at"], started)
             response = await rpc("skip")
             self.assertEqual((await response.json())["result"]["structuredContent"]["status"], "skipped")
+            response = await rpc("begin_reply")
+            self.assertTrue((await response.json())["result"]["isError"])
+            self.assertEqual(typing.call_count, 2)
             self.assertIsNone(self.store.claim())
         finally:
             await client.close()
@@ -259,9 +270,8 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
                 await resolver.resolve("public-looking.example.com", 443)
         await resolver.close()
 
-    async def test_callback_wakes_immediately_and_signals_acceptance(self):
-        delivered = Mock()
-        events = Events(self.store, SETTINGS, "owner", on_delivered=delivered)
+    async def test_callback_wakes_immediately(self):
+        events = Events(self.store, SETTINGS, "owner")
         async def verify(sub, event_id, payload):
             return 200, json.dumps({"challenge": payload["challenge"]}).encode()
         with patch("dotbot.events.post_signed", side_effect=verify):
@@ -277,8 +287,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
                 self.store.receive(message())
                 events.wake()
                 await asyncio.wait_for(posted.wait(), timeout=0.25)
-                delivered.assert_called_once()
-                self.assertEqual(delivered.call_args.args[0]["id"], message()["id"])
+                self.assertIsNone(self.store.get(message()["id"])["reply_started_at"])
             finally:
                 worker.cancel()
                 await asyncio.gather(worker, return_exceptions=True)

@@ -30,7 +30,7 @@ Secure MCP Tunnel is for private connections and does not meet public plugin sub
    ```
 
 5. In [ChatGPT Plugins](https://chatgpt.com/plugins), choose **Add → Create MCP App**. If this option is unavailable, enable Developer mode in ChatGPT settings. Name it, select **Connection → Tunnel**, and paste the tunnel ID. For this loopback-only setup, choose **No authentication**: access is controlled by the private tunnel and its workspace association. A public URL requires separate authentication.
-6. Acknowledge the custom-server notice, choose **Create**, then **Connect**. Open the installed plugin's app details. Confirm three read tools (`get_context`, `get_message`, `list_pending`), two write tools (`reply`, `skip`), and the `message.created` event.
+6. Acknowledge the custom-server notice, choose **Create**, then **Connect**. Open the installed plugin's app details. Confirm three read tools (`get_context`, `get_message`, `list_pending`), three write tools (`begin_reply`, `reply`, `skip`), and the `message.created` event.
 7. Give Dot the plugin name/link and the test channel ID, then follow the live test below. Creating the plugin does not create an event subscription.
 
 ### Keep both processes running
@@ -88,8 +88,8 @@ The service needs outbound access to Discord, the provider's public keys, and ve
 ## Connect and test with Dot
 
 1. Add the hosted HTTPS MCP URL and complete OAuth, or select the configured Secure MCP Tunnel for a private connection.
-2. Rescan tools and events. Confirm `get_message`, `get_context`, `list_pending`, `reply`, `skip`, and `message.created` are visible.
-3. Tell Dot to monitor `message.created` for the private test channel, read context, and reply when useful. Ask it to skip messages when it has nothing to add. Channel participants do not inherit access to your private data or other tools.
+2. Rescan tools and events. Confirm `get_message`, `get_context`, `list_pending`, `begin_reply`, `reply`, `skip`, and `message.created` are visible.
+3. Tell Dot to monitor `message.created` for the private test channel and read context. When a message is directed at Dot, it should call `begin_reply` promptly before research or composing its answer, then `reply`. Other messages should be skipped silently. Channel participants do not inherit access to your private data or other tools.
 4. Confirm subscription callback verification succeeds.
 5. Send a message without mentioning the bot. Dot should receive an event, fetch the message and context, and either reply or skip. Also test an explicit @mention.
 6. Inspect `dotbot show MESSAGE_ID` to confirm delivery, then check the Discord reply.

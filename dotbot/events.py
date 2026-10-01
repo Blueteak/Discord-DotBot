@@ -104,12 +104,11 @@ class CallbackError(ValueError):
 
 
 class Events:
-    def __init__(self, store, config, principal, on_delivered=None):
+    def __init__(self, store, config, principal):
         self.store, self.config, self.principal = store, config, principal
         self.db = store.db
         self.lock = asyncio.Lock()
         self.wakeup = asyncio.Event()
-        self.on_delivered = on_delivered
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS subscriptions (
                 id TEXT PRIMARY KEY, principal TEXT NOT NULL, channel_id TEXT NOT NULL,
@@ -126,7 +125,7 @@ class Events:
         """)
 
     def definition(self):
-        return {"name": NAME, "description": "A permitted person sent a message in an enabled Discord channel. Fetch the message and its context, then reply if useful or skip it.",
+        return {"name": NAME, "description": "A permitted person sent a message in an enabled Discord channel. Read the message and context to decide whether it is directed at you. If it is, call begin_reply promptly before preparing your answer, then reply. Otherwise skip it without typing or replying.",
                 "delivery": ["webhook"],
                 "inputSchema": {"type": "object", "properties": {"channel_id": {"type": "string", "enum": self.config["channel_ids"]}},
                                 "required": ["channel_id"], "additionalProperties": False},
@@ -260,8 +259,6 @@ class Events:
                 self.db.execute("""UPDATE deliveries SET status=?, attempts=?, next_attempt=?
                     WHERE subscription_id=? AND request_id=?""",
                     (status, attempts, time.time() + min(300, 2 ** attempts), sub["id"], request["id"]))
-            if status == "delivered" and self.on_delivered:
-                self.on_delivered(request)
             return True
 
     def wake(self):

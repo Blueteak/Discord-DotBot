@@ -30,11 +30,13 @@ TOOLS = [
      "inputSchema": schema({"message_id": {"type": "string"}}, ["message_id"])},
     {"name": "skip", "description": "Mark a pending message handled without responding in Discord. Use when there is nothing useful to add. Idempotent.",
      "inputSchema": schema({"message_id": {"type": "string"}}, ["message_id"])},
+    {"name": "begin_reply", "description": "Confirm you intend to respond and show the bot's typing indicator. Call promptly after deciding a message is directed at you, before research or composing the full answer. Do not call merely because a channel message arrived. Then call reply or skip. Typing is limited to two minutes; repeated calls do not extend an active indicator.",
+     "inputSchema": schema({"message_id": {"type": "string"}}, ["message_id"])},
     {"name": "reply", "description": "Queue a reply to one Discord request in its original channel. Sends a public message visible to that channel. One reply per request; repeating identical text is idempotent. Check get_message for delivery status.",
      "inputSchema": schema({"message_id": {"type": "string"}, "text": {"type": "string", "minLength": 1, "maxLength": 2000}}, ["message_id", "text"])},
 ]
 for tool in TOOLS:
-    tool["annotations"] = {"readOnlyHint": tool["name"] not in ("reply", "skip"), "destructiveHint": False,
+    tool["annotations"] = {"readOnlyHint": tool["name"] not in ("reply", "skip", "begin_reply"), "destructiveHint": False,
                            "idempotentHint": True, "openWorldHint": False}
     tool["securitySchemes"] = [{"type": "oauth2", "scopes": ["dotbot"]}]
 
@@ -101,7 +103,7 @@ def tool_result(value, error=False):
             "structuredContent": value, "isError": error}
 
 
-def make_app(config, store, events, auth):
+def make_app(config, store, events, auth, begin_reply=None):
     def visible(message):
         return allowed(config, message["author_id"], message["guild_id"], message["channel_id"])
 
@@ -186,6 +188,13 @@ def make_app(config, store, events, auth):
                             result = tool_result({"messages": [m for m in store.context(message["id"]) if visible(m)]})
                         elif name == "skip":
                             result = tool_result(store.skip(message["id"]))
+                        elif name == "begin_reply":
+                            if begin_reply is None:
+                                raise ValueError("Typing is unavailable on this server.")
+                            message = store.begin_reply(message["id"])
+                            begin_reply(message)
+                            result = tool_result({"message_id": message["id"], "reply_started_at": message["reply_started_at"],
+                                                  "typing_requested": True})
                         else:
                             result = tool_result(store.reply(message["id"], args["text"]) if name == "reply" else message)
                 except ValueError as exc:

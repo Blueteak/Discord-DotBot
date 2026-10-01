@@ -43,7 +43,7 @@ class Store:
         """)
         columns = {row["name"] for row in self.db.execute("PRAGMA table_info(requests)")}
         for name, declaration in (("author_name", "TEXT"), ("mentioned", "INTEGER NOT NULL DEFAULT 0"),
-                                  ("reply_to", "TEXT"), ("reply_sent_at", "REAL")):
+                                  ("reply_to", "TEXT"), ("reply_sent_at", "REAL"), ("reply_started_at", "REAL")):
             if name not in columns:
                 self.db.execute(f"ALTER TABLE requests ADD COLUMN {name} {declaration}")
         self.db.execute("CREATE INDEX IF NOT EXISTS requests_channel_time ON requests(channel_id, received_at)")
@@ -96,6 +96,14 @@ class Store:
         if row["status"] != "skipped":
             raise ValueError("Only pending messages can be skipped.")
         return row
+
+    def begin_reply(self, request_id):
+        with self.db:
+            result = self.db.execute("""UPDATE requests SET reply_started_at=COALESCE(reply_started_at, ?)
+                WHERE id=? AND status='pending'""", (time.time(), request_id))
+        if result.rowcount != 1:
+            raise ValueError("Only pending messages can begin a reply.")
+        return self.get(request_id)
 
     def reply(self, request_id, text):
         # A single message keeps delivery and recovery unambiguous.
