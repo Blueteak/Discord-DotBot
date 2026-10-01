@@ -1,0 +1,26 @@
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+
+# Local state and logs
+data/
+*.log
+*.sqlite
+*.sqlite-*
+*.db
+
+# Dependencies and build output
+node_modules/
+dist/
+build/
+coverage/
+.venv/
+__pycache__/
+
+# Editor and operating system files
+.DS_Store
+.idea/
+.vscode/
