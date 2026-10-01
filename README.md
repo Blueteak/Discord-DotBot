@@ -4,12 +4,6 @@ A self-hosted Discord bot for talking to your OpenAI Dot from the Discord server
 
 Each user runs their own relay on an always-on machine and invites their Discord bot to their servers. The relay stores incoming messages, notifies Dot through MCP Events, and sends Dot's replies back to the originating conversation.
 
-## Status
-
-A Python CLI server with a persistent inbox, Discord replies, and MCP tools/events for Dot. Runs directly on a local computer or server. No Docker or Sites dependency.
-
-The relay receives conversation text; Dot decides when to contribute. A live Discord → Dot → Discord exchange was verified on October 1, 2026: a message without an @mention triggered Dot and received a reply through the private Secure MCP Tunnel plugin. ChatGPT discovers all five tools and `message.created`. Long-term availability and subscription renewal still need testing.
-
 ## How it works
 
 ```text
