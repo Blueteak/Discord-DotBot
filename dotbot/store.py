@@ -28,6 +28,18 @@ class Store:
                 updated_at REAL NOT NULL,
                 connected INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS callback_attempts (
+                id INTEGER PRIMARY KEY,
+                request_id TEXT NOT NULL,
+                subscription_id TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                started_at REAL NOT NULL,
+                completed_at REAL,
+                duration_ms REAL,
+                http_status INTEGER,
+                error_type TEXT
+            );
+            CREATE INDEX IF NOT EXISTS callback_attempts_request ON callback_attempts(request_id);
         """)
         columns = {row["name"] for row in self.db.execute("PRAGMA table_info(requests)")}
         for name, declaration in (("author_name", "TEXT"), ("mentioned", "INTEGER NOT NULL DEFAULT 0"),
@@ -63,7 +75,11 @@ class Store:
         row = self.db.execute("SELECT * FROM requests WHERE id=?", (request_id,)).fetchone()
         if row is None:
             raise ValueError("Unknown request ID.")
-        return dict(row)
+        result = dict(row)
+        result["callback_attempts"] = [dict(attempt) for attempt in self.db.execute(
+            "SELECT event_id, started_at, completed_at, duration_ms, http_status, error_type "
+            "FROM callback_attempts WHERE request_id=? ORDER BY id", (request_id,))]
+        return result
 
     def context(self, request_id, limit=30):
         anchor = self.get(request_id)

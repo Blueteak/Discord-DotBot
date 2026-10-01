@@ -278,15 +278,29 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         with patch("dotbot.events.post_signed", side_effect=verify):
             await events.subscribe(subscription())
         self.store.receive(message())
-        with patch("dotbot.events.post_signed", side_effect=[(503, b""), (410, b"")]) as post:
+        with patch("dotbot.events.post_signed", side_effect=[asyncio.TimeoutError("private callback URL"), (503, b""), (410, b"")]) as post:
+            await events.tick()
+            self.store.db.execute("UPDATE deliveries SET next_attempt=0")
+            self.store.db.commit()
             await events.tick()
             self.store.db.execute("UPDATE deliveries SET next_attempt=0")
             self.store.db.commit()
             await events.tick()
             await events.tick()
-            self.assertEqual(post.call_count, 2)
+            self.assertEqual(post.call_count, 3)
             self.assertEqual(post.call_args_list[0].args[1], post.call_args_list[1].args[1])
             self.assertEqual(self.store.db.execute("SELECT expires FROM subscriptions").fetchone()[0], 0)
+        saved = self.store.get(message()["id"])
+        attempts = saved["callback_attempts"]
+        self.assertEqual([a["http_status"] for a in attempts], [None, 503, 410])
+        self.assertEqual(attempts[0]["error_type"], "TimeoutError")
+        self.assertNotIn("private callback URL", json.dumps(saved))
+        self.assertNotIn(SECRET, json.dumps(saved))
+        for attempt in attempts:
+            self.assertEqual(attempt["event_id"], "discord_" + message()["id"])
+            self.assertGreaterEqual(attempt["started_at"], saved["received_at"])
+            self.assertGreaterEqual(attempt["completed_at"], attempt["started_at"])
+            self.assertGreaterEqual(attempt["duration_ms"], 0)
 
     async def test_mcp_auth_discovery_event_and_idempotent_reply(self):
         with patch.dict(os.environ, {"DOTBOT_MCP_TOKEN": "x" * 32}):

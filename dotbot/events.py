@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import logging
 import secrets
 import socket
 import time
@@ -16,6 +17,7 @@ import aiohttp
 from .config import allowed
 
 NAME = "message.created"
+log = logging.getLogger("dotbot")
 
 
 def canonical(value):
@@ -211,16 +213,44 @@ class Events:
                            "data": {"message_id": request["id"], "guild_id": request["guild_id"],
                                     "channel_id": request["channel_id"], "author_id": request["author_id"],
                                     "url": f'https://discord.com/channels/{request["guild_id"]}/{request["channel_id"]}/{request["id"]}'}}
+                started = time.time()
+                with self.db:
+                    attempt_id = self.db.execute("""INSERT INTO callback_attempts
+                        (request_id, subscription_id, event_id, started_at) VALUES (?, ?, ?, ?)""",
+                        (request["id"], sub["id"], payload["eventId"], started)).lastrowid
+                log.info("Callback start event=%s attempt=%s received_at=%s started_at=%s queue_ms=%.1f",
+                         payload["eventId"], attempt_id, iso(request["received_at"]), iso(started),
+                         (started - request["received_at"]) * 1000)
+                clock = time.monotonic()
+                code, error_type = None, None
                 try:
                     code, _ = await post_signed(sub, payload["eventId"], payload)
                     status = "delivered" if 200 <= code < 300 else ("pending" if code == 429 or code >= 500 else "stopped")
                     if code == 410:
                         with self.db:
                             self.db.execute("UPDATE subscriptions SET expires=0 WHERE id=?", (sub["id"],))
-                except (aiohttp.ClientError, asyncio.TimeoutError):
+                except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                    error_type = type(exc).__name__
                     status = "pending"
-                except ValueError:
+                except ValueError as exc:
+                    error_type = type(exc).__name__
                     status = "stopped"
+                except asyncio.CancelledError:
+                    error_type = "CancelledError"
+                    raise
+                except Exception as exc:
+                    error_type = type(exc).__name__
+                    raise
+                finally:
+                    completed = time.time()
+                    duration_ms = (time.monotonic() - clock) * 1000
+                    with self.db:
+                        self.db.execute("""UPDATE callback_attempts SET completed_at=?, duration_ms=?,
+                            http_status=?, error_type=? WHERE id=?""",
+                            (completed, duration_ms, code, error_type, attempt_id))
+                    # Never log callback URLs, signing secrets, headers, or response bodies.
+                    log.info("Callback complete event=%s attempt=%s completed_at=%s duration_ms=%.1f http_status=%s error_type=%s",
+                             payload["eventId"], attempt_id, iso(completed), duration_ms, code, error_type)
             attempts = sub["attempts"] + 1
             if status == "pending" and attempts >= 8:
                 status = "exhausted"
