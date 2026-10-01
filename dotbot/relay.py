@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+import re
 import signal
 import time
 
@@ -10,6 +11,24 @@ from .config import allowed
 from .locking import relay_lock
 
 log = logging.getLogger("dotbot")
+
+
+def delivery_error(exc, request, token=None):
+    # Only exception text, never request/response headers or bodies. Redact before
+    # truncation so a long credential cannot leave a prefix in the saved error.
+    text = str(exc.text if isinstance(exc, discord.HTTPException) else exc)
+    for value in (token, request.get("reply"), request.get("content")):
+        if value:
+            text = text.replace(value, "[redacted]")
+    text = re.sub(r"https?://[^\s]+", "[redacted URL]", text)
+    text = re.sub(r"(?i)\b(?:authorization|token|secret|api[_-]?key)\s*[:=]\s*\S+", "[redacted credential]", text)
+    text = re.sub(r"(?i)\b(?:Bot|Bearer)\s+\S+", "[redacted credential]", text)
+    text = re.sub(r"[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,}|\b(?:sk-|whsec_)[A-Za-z0-9_-]+", "[redacted credential]", text)
+    text = " ".join("".join(c if c.isprintable() else " " for c in text).split())[:500]
+    details = type(exc).__name__
+    if isinstance(exc, discord.HTTPException):
+        details += f" status={exc.status} code={exc.code}"
+    return f"{details}: {text or '(no error text)'}"
 
 
 class Relay(discord.Client):
@@ -69,12 +88,15 @@ class Relay(discord.Client):
                 channel_id=int(request["channel_id"]), guild_id=int(request["guild_id"]), fail_if_not_exists=True)
             sent = await channel.send(request["reply"], reference=reference, nonce=request["id"],
                                       allowed_mentions=discord.AllowedMentions.none())
-        except (discord.Forbidden, discord.NotFound):
-            self.store.finish(request["id"], "failed", error="Discord denied access, or the channel/original message was deleted.")
         except Exception as exc:
             # A network failure can happen after Discord accepted the message.
             # Do not blindly resend on the next tick or restart.
-            self.store.finish(request["id"], "uncertain", error=f"Delivery not confirmed ({type(exc).__name__}). Check Discord before retrying.")
+            status = "failed" if isinstance(exc, (discord.Forbidden, discord.NotFound)) else "uncertain"
+            details = delivery_error(exc, request, self.http.token)
+            error = details if status == "failed" else f"Delivery not confirmed. {details}. Check Discord before retrying."
+            self.store.finish(request["id"], status, error=error)
+            log.warning("Reply %s for request %s in channel %s: %s", status,
+                        request["id"], request["channel_id"], details)
         else:
             self.store.finish(request["id"], "sent", reply_id=str(sent.id))
             log.info("Delivered reply for %s", request["id"])

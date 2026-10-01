@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+import discord
 from aiohttp.test_utils import TestClient, TestServer
 from cryptography.hazmat.primitives.asymmetric import rsa
 import jwt
@@ -182,6 +183,34 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         await relay.send_request(self.store.claim())
         self.assertEqual(self.store.get(message()["id"])["status"], "uncertain")
         self.assertIsNone(self.store.claim())
+
+    async def test_delivery_error_preserves_diagnostics_without_credentials(self):
+        relay = Relay(SETTINGS, self.store)
+        relay.http.token = "private-bot-credential"
+        for index, (kind, status, code, expected) in enumerate([
+            (discord.NotFound, 404, 10008, "failed"),
+            (discord.Forbidden, 403, 50013, "failed"),
+            (discord.HTTPException, 400, 50035, "uncertain"),
+        ]):
+            with self.subTest(status=status):
+                m = message(str(100000000000000030 + index))
+                self.store.receive(m)
+                self.store.reply(m["id"], "private reply text")
+                exc = kind(SimpleNamespace(status=status, reason="Rejected"), {
+                    "code": code, "message": "Unknown Message\nprivate-bot-credential private reply text "
+                    "https://example.com/private?token=secret Bearer secret-key"})
+                relay.get_channel = Mock(return_value=SimpleNamespace(guild=SimpleNamespace(id=int(GUILD)),
+                    send=AsyncMock(side_effect=exc)))
+                with self.assertLogs("dotbot", level="WARNING") as logs:
+                    await relay.send_request(self.store.claim())
+                saved = self.store.get(m["id"])
+                self.assertEqual(saved["status"], expected)
+                for output in (saved["error"], " ".join(logs.output)):
+                    self.assertIn(f"status={status} code={code}", output)
+                    self.assertIn("Unknown Message", output)
+                    for secret in (relay.http.token, "private reply text", "example.com", "secret-key", "\n"):
+                        self.assertNotIn(secret, output)
+                self.assertIsNone(self.store.claim())
 
     async def test_subscription_verification_delivery_restart_and_unsubscribe(self):
         events = Events(self.store, SETTINGS, "owner")
