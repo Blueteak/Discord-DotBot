@@ -4,23 +4,36 @@ Use an always-on Linux or macOS host with durable storage. Python 3.9+ is suppor
 
 See the [Sites capability test](sites-probe.md) for the managed-hosting experiment. Sites passed storage and outbound Discord handshake checks, but request-scoped background work stopped before 40 seconds.
 
-## Run the relay
+## Local computer or private server
 
-Follow the [README installation steps](../README.md#relay-installation). Run `dotbot run` under your host's process supervisor. All commands must use the same data directory. Set `DOTBOT_DATA_DIR` to an absolute path if commands run from different working directories.
+Run `dotbot serve --local`. Both Discord and the MCP endpoint run in the foreground; Ctrl+C or SIGTERM stops them. The bot connects outbound to Discord. No inbound Discord endpoint is needed.
 
-The Discord connection is outbound. The local CLI does not expose an HTTP server.
+The MCP endpoint listens on `127.0.0.1:8765`. This mode intentionally trusts processes on the same machine and omits OAuth discovery. Keep it on a trusted host. `--local --host 0.0.0.0` is rejected.
 
-Alternatively, use Docker with a persistent named volume:
+OpenAI's [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) can connect private MCP servers using outbound HTTPS. It requires a Platform tunnel, a runtime API key, and access for the target ChatGPT workspace. Configure its local HTTP target as `http://127.0.0.1:8765/mcp`. Run the tunnel client alongside DotBot, then select that tunnel when creating the private plugin. Keep tunnel credentials outside this repository.
 
-```sh
-docker build -t discord-dotbot .
-docker volume create dotbot-data
-docker run --rm -it -v dotbot-data:/data discord-dotbot setup
-docker run -d --name discord-dotbot --restart unless-stopped \
-  -v dotbot-data:/data discord-dotbot
+This project's tunnel and Dot event integration have not been verified live. Secure MCP Tunnel is for private connections and does not meet public plugin submission requirements. Sharing this GitHub application for individual self-deployment is separate from submitting a public plugin.
+
+For unattended use, let your operating system's service manager start the CLI and restart it on failure. For example, on Linux, adapt this systemd unit to your account and checkout:
+
+```ini
+[Unit]
+Description=Discord DotBot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=YOUR_USER
+ExecStart=/absolute/path/Discord-DotBot/.venv/bin/dotbot --data-dir /absolute/private/path/dotbot-data serve --local
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-The image runs as a non-root user. Keep the volume when replacing the container. This runs the Discord relay; MCP connectivity requires the additional setup below. The Docker image has not been built locally because the Docker daemon is unavailable. The native Python installation and local tests pass.
+The service user must own the data directory. On macOS use launchd; on Windows use a service manager or Task Scheduler. No service is installed automatically. Prevent sleep if the device should stay available.
 
 ## Add authenticated MCP access
 
@@ -47,17 +60,15 @@ Start the combined service:
 
 Put a trusted HTTPS reverse proxy in front of port 8765. Forward `/mcp` and `/.well-known/oauth-protected-resource` to the service, preserving authorization and MCP headers. Keep the backend port private. The service publishes protected resource metadata pointing ChatGPT to the configured provider.
 
-In a container, run `serve --host 0.0.0.0 --port 8765`, publish the port only to the host's loopback interface, and keep `mcp.json` in the persistent volume.
-
 The service needs outbound access to Discord, the provider's public keys, and verified HTTPS event callbacks. Do not log authorization headers or request bodies at the proxy.
 
 ## Connect and test with Dot
 
-1. Add the hosted HTTPS MCP URL to a private ChatGPT plugin and complete its OAuth connection.
-2. Rescan tools and events. Confirm `get_message`, `list_pending`, `reply`, and `message.created` are visible.
-3. Tell Dot to monitor `message.created` for the private test channel and respond to your requests using the read/reply tools.
+1. Add the hosted HTTPS MCP URL and complete OAuth, or select the configured Secure MCP Tunnel for a private connection.
+2. Rescan tools and events. Confirm `get_message`, `get_context`, `list_pending`, `reply`, `skip`, and `message.created` are visible.
+3. Tell Dot to monitor `message.created` for the private test channel, read context, and reply when useful. Ask it to skip messages when it has nothing to add. Channel participants do not inherit access to your private data or other tools.
 4. Confirm subscription callback verification succeeds.
-5. Mention your bot in that channel. Dot should receive an event, fetch the message, and queue one reply.
+5. Send a message without mentioning the bot. Dot should receive an event, fetch the message and context, and either reply or skip. Also test an explicit @mention.
 6. Inspect `dotbot show MESSAGE_ID` to confirm delivery, then check the Discord reply.
 7. Stop monitoring and confirm further messages produce no events for that subscription.
 

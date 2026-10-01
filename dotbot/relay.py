@@ -1,19 +1,21 @@
 import asyncio
 import contextlib
-import fcntl
 import logging
+import signal
 import time
 
 import discord
 
 from .config import allowed
+from .locking import relay_lock
 
 log = logging.getLogger("dotbot")
 
 
 class Relay(discord.Client):
     def __init__(self, config, store):
-        super().__init__(intents=discord.Intents(guilds=True, guild_messages=True),
+        super().__init__(intents=discord.Intents(guilds=True, guild_messages=True,
+                         message_content=config.get("listen", "mentions") == "channels"),
                          allowed_mentions=discord.AllowedMentions.none(), max_messages=None)
         self.config = config
         self.store = store
@@ -38,16 +40,20 @@ class Relay(discord.Client):
         if not allowed(self.config, message.author.id, message.guild.id if message.guild else None,
                        message.channel.id, message.author.bot, bool(message.webhook_id)):
             return
-        # Require a literal mention on every request, including in threads.
-        # This works without Discord's privileged Message Content intent.
-        if not self.user or not any(user.id == self.user.id for user in message.mentions):
+        if not self.user:
+            return
+        mentioned = any(user.id == self.user.id for user in message.mentions)
+        if self.config.get("listen", "mentions") == "mentions" and not mentioned:
             return
         content = message.content.replace(f"<@{self.user.id}>", "").replace(f"<@!{self.user.id}>", "").strip()
         if not content:
             return
         if self.store.receive({"id": str(message.id), "guild_id": str(message.guild.id),
                                "channel_id": str(message.channel.id), "author_id": str(message.author.id),
-                               "content": content, "received_at": time.time()}):
+                               "content": content, "received_at": time.time(),
+                               "author_name": getattr(message.author, "display_name", str(message.author.id)),
+                               "mentioned": int(mentioned),
+                               "reply_to": str(message.reference.message_id) if getattr(message, "reference", None) else None}):
             log.info("Queued request %s", message.id)
 
     async def send_request(self, request):
@@ -92,25 +98,25 @@ class Relay(discord.Client):
 
 
 def run(config, store, directory, token, serve=None):
-    # OS lock releases on exit, including a crash. Only one relay per data folder.
-    with (directory / "relay.lock").open("w") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise ValueError("A relay is already running for this data directory.") from None
+    with relay_lock(directory):
         store.recover()
         client = Relay(config, store)
         async def start():
             runner = None
             worker = None
+            loop = asyncio.get_running_loop()
+            current = asyncio.current_task()
+            # asyncio.run handles Ctrl+C; service managers normally send SIGTERM.
+            with contextlib.suppress(NotImplementedError):
+                loop.add_signal_handler(signal.SIGTERM, current.cancel)
             if serve:
                 from aiohttp import web
                 from .events import Events
                 from .mcp import Auth, make_app
-                if serve.dev and serve.host != "127.0.0.1":
-                    raise ValueError("Development MCP authentication is restricted to 127.0.0.1.")
-                auth = Auth(directory, dev=serve.dev)
-                if serve.dev:
+                if (serve.dev or serve.local) and serve.host != "127.0.0.1":
+                    raise ValueError("Local MCP modes are restricted to 127.0.0.1.")
+                auth = Auth(directory, dev=serve.dev, local=serve.local)
+                if serve.dev or serve.local:
                     auth.resource = f"http://127.0.0.1:{serve.port}/mcp"
                 events = Events(store, config, auth.principal)
                 runner = web.AppRunner(make_app(config, store, events, auth), access_log=None)
@@ -129,6 +135,8 @@ def run(config, store, directory, token, serve=None):
                     await asyncio.gather(*pending, return_exceptions=True)
                     for task in done:
                         task.result()
+                    if client.worker and client.worker.done() and not client.worker.cancelled():
+                        client.worker.result()
             finally:
                 if worker:
                     worker.cancel()
@@ -136,4 +144,11 @@ def run(config, store, directory, token, serve=None):
                         await worker
                 if runner:
                     await runner.cleanup()
-        asyncio.run(start())
+        try:
+            asyncio.run(start())
+        except asyncio.CancelledError:
+            pass
+        except discord.PrivilegedIntentsRequired:
+            raise ValueError("Enable Message Content Intent in Discord Developer Portal > Bot, or configure --listen mentions.") from None
+        except discord.LoginFailure:
+            raise ValueError("Discord rejected the bot token. Update the token file or DISCORD_BOT_TOKEN.") from None

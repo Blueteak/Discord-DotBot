@@ -14,6 +14,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 import jwt
 
 from dotbot import config
+from dotbot.cli import parser, setup
+from dotbot.locking import relay_lock
 from dotbot.events import Events, CallbackError, callback_url, headers, PublicResolver
 from dotbot.mcp import Auth, make_app, PREFIX, VERSION
 from dotbot.relay import Relay
@@ -43,6 +45,81 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         self.store.close()
         self.temp.cleanup()
+
+    async def test_channel_conversation_context_and_silence(self):
+        settings = dict(SETTINGS, listen="channels", audience="channel")
+        relay = Relay(settings, self.store)
+        relay._connection.user = SimpleNamespace(id=int(BOT))
+        m = SimpleNamespace(id=100000000000000020, guild=SimpleNamespace(id=int(GUILD)),
+            channel=SimpleNamespace(id=int(CHANNEL)), author=SimpleNamespace(id=100000000000000099, bot=False, display_name="Guest"),
+            webhook_id=None, mentions=[], content="Could someone explain this?", reference=None)
+        self.assertTrue(relay.intents.message_content)
+        await relay.on_message(m)
+        first = self.store.get(str(m.id))
+        self.assertEqual(first["mentioned"], 0)
+        self.assertEqual(first["author_name"], "Guest")
+        self.store.skip(str(m.id))
+        self.store.skip(str(m.id))
+        self.assertIsNone(self.store.claim())
+        with self.assertRaises(ValueError):
+            self.store.reply(str(m.id), "too late")
+        m.id += 1
+        m.content = "Here is the missing detail."
+        m.reference = SimpleNamespace(message_id=int(first["id"]))
+        await relay.on_message(m)
+        self.assertEqual(len(self.store.context(str(m.id))), 2)
+        self.assertEqual(self.store.get(str(m.id))["reply_to"], first["id"])
+        for field, value in (("author", SimpleNamespace(id=int(BOT), bot=True)),
+                             ("channel", SimpleNamespace(id=999)), ("guild", None), ("webhook_id", 123)):
+            with patch.object(m, field, value):
+                m.id += 1
+                await relay.on_message(m)
+        self.assertEqual(len(self.store.list("all")), 2)
+        self.assertFalse(config.allowed(SETTINGS, first["author_id"], GUILD, CHANNEL))
+
+    async def test_setup_keeps_credentials_private_and_lock_exclusive(self):
+        directory = self.path / "new-install"
+        token_file = self.path / "input-token"
+        token_file.write_text("test-secret-not-a-real-token")
+        args = parser().parse_args(["--data-dir", str(directory), "setup", "--owner", OWNER,
+            "--guilds", GUILD, "--channels", CHANNEL, "--token-file", str(token_file)])
+        output = setup(args)
+        self.assertNotIn("test-secret", json.dumps(output))
+        self.assertNotIn("test-secret", (directory / "config.json").read_text())
+        self.assertEqual(config.token(directory), "test-secret-not-a-real-token")
+        self.assertEqual(config.load(directory)["listen"], "channels")
+        if os.name != "nt":
+            self.assertEqual((directory / "token").stat().st_mode & 0o777, 0o600)
+        with relay_lock(directory):
+            with self.assertRaises(ValueError):
+                with relay_lock(directory):
+                    pass
+        with self.assertRaises(ValueError):
+            setup(args)
+
+    async def test_local_mcp_context_skip_and_origin_boundary(self):
+        auth = Auth(self.path, local=True)
+        events = Events(self.store, SETTINGS, auth.principal)
+        client = TestClient(TestServer(make_app(SETTINGS, self.store, events, auth)))
+        try:
+            await client.start_server()
+            self.store.receive(message())
+            async def rpc(name, origin=None):
+                method = "tools/call"
+                params = {"name": name, "arguments": {"message_id": message()["id"]}, "_meta": {
+                    PREFIX + "protocolVersion": VERSION, PREFIX + "clientInfo": {}, PREFIX + "clientCapabilities": {}}}
+                hs = {"MCP-Protocol-Version": VERSION, "Mcp-Method": method, "Mcp-Name": name}
+                if origin:
+                    hs["Origin"] = origin
+                return await client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, headers=hs)
+            self.assertEqual((await rpc("skip", "https://untrusted.example")).status, 403)
+            response = await rpc("get_context")
+            self.assertEqual(len((await response.json())["result"]["structuredContent"]["messages"]), 1)
+            response = await rpc("skip")
+            self.assertEqual((await response.json())["result"]["structuredContent"]["status"], "skipped")
+            self.assertIsNone(self.store.claim())
+        finally:
+            await client.close()
 
     async def test_restart_deduplication_and_uncertain_send(self):
         m = message()

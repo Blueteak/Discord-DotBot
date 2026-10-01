@@ -29,17 +29,25 @@ class Store:
                 connected INTEGER NOT NULL
             );
         """)
+        columns = {row["name"] for row in self.db.execute("PRAGMA table_info(requests)")}
+        for name, declaration in (("author_name", "TEXT"), ("mentioned", "INTEGER NOT NULL DEFAULT 0"),
+                                  ("reply_to", "TEXT"), ("reply_sent_at", "REAL")):
+            if name not in columns:
+                self.db.execute(f"ALTER TABLE requests ADD COLUMN {name} {declaration}")
+        self.db.execute("CREATE INDEX IF NOT EXISTS requests_channel_time ON requests(channel_id, received_at)")
+        self.db.commit()
         (directory / "relay.sqlite").chmod(0o600)
 
     def close(self):
         self.db.close()
 
     def receive(self, message):
+        message = {"author_name": None, "mentioned": 0, "reply_to": None, **message}
         with self.db:
             result = self.db.execute("""
                 INSERT OR IGNORE INTO requests
-                (id, guild_id, channel_id, author_id, content, received_at)
-                VALUES (:id, :guild_id, :channel_id, :author_id, :content, :received_at)
+                (id, guild_id, channel_id, author_id, content, received_at, author_name, mentioned, reply_to)
+                VALUES (:id, :guild_id, :channel_id, :author_id, :content, :received_at, :author_name, :mentioned, :reply_to)
             """, message)
         return result.rowcount == 1
 
@@ -56,6 +64,22 @@ class Store:
         if row is None:
             raise ValueError("Unknown request ID.")
         return dict(row)
+
+    def context(self, request_id, limit=30):
+        anchor = self.get(request_id)
+        rows = self.db.execute("""SELECT * FROM requests
+            WHERE guild_id=? AND channel_id=? AND received_at<=?
+            ORDER BY received_at DESC, id DESC LIMIT ?""",
+            (anchor["guild_id"], anchor["channel_id"], anchor["received_at"], limit))
+        return list(reversed([dict(row) for row in rows]))
+
+    def skip(self, request_id):
+        with self.db:
+            self.db.execute("UPDATE requests SET status='skipped' WHERE id=? AND status='pending'", (request_id,))
+        row = self.get(request_id)
+        if row["status"] != "skipped":
+            raise ValueError("Only pending messages can be skipped.")
+        return row
 
     def reply(self, request_id, text):
         # A single message keeps delivery and recovery unambiguous.
@@ -86,8 +110,8 @@ class Store:
 
     def finish(self, request_id, status, reply_id=None, error=None):
         with self.db:
-            self.db.execute("UPDATE requests SET status=?, reply_id=?, error=? WHERE id=? AND status='sending'",
-                            (status, reply_id, error, request_id))
+            self.db.execute("UPDATE requests SET status=?, reply_id=?, error=?, reply_sent_at=? WHERE id=? AND status='sending'",
+                            (status, reply_id, error, time.time() if status == "sent" else None, request_id))
 
     def recover(self):
         with self.db:

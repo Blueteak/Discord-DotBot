@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 from pathlib import Path
 
 
@@ -18,6 +19,13 @@ def validate(config):
         if not isinstance(values, list) or not values:
             raise ValueError(f"{key} must be a nonempty list of Discord IDs.")
         config[key] = list(dict.fromkeys(snowflake(v) for v in values))
+    # Keep older installations' access scope unchanged.
+    config.setdefault("listen", "mentions")
+    config.setdefault("audience", "owner")
+    if config["listen"] not in ("channels", "mentions"):
+        raise ValueError("listen must be channels or mentions.")
+    if config["audience"] not in ("channel", "owner"):
+        raise ValueError("audience must be channel or owner.")
     return config
 
 
@@ -45,16 +53,23 @@ def save(directory, config, secret):
     private_directory(directory)
     for name, content in (("config.json", json.dumps(validate(config), indent=2) + "\n"),
                           ("token", secret.strip() + "\n")):
-        path = directory / name
-        # Permissions apply before any secret bytes are written.
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        private_write(directory / name, content)
+
+
+def private_write(path, content):
+    # Atomic replacement, with private permissions before writing any bytes.
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".dotbot-")
+    try:
         with os.fdopen(fd, "w") as stream:
-            os.chmod(path, 0o600)
             stream.write(content)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def allowed(config, author_id, guild_id, channel_id, is_bot=False, webhook=False):
     return (not is_bot and not webhook
-            and str(author_id) == config["owner_id"]
+            and (config.get("audience", "owner") == "channel" or str(author_id) == config["owner_id"])
             and str(guild_id) in config["guild_ids"]
             and str(channel_id) in config["channel_ids"])

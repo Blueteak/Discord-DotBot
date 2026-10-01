@@ -122,7 +122,7 @@ class Events:
         """)
 
     def definition(self):
-        return {"name": NAME, "description": "The configured Discord owner mentioned the bot in a permitted channel. Fetch the message by message_id.",
+        return {"name": NAME, "description": "A permitted person sent a message in an enabled Discord channel. Fetch the message and its context, then reply if useful or skip it.",
                 "delivery": ["webhook"],
                 "inputSchema": {"type": "object", "properties": {"channel_id": {"type": "string", "enum": self.config["channel_ids"]}},
                                 "required": ["channel_id"], "additionalProperties": False},
