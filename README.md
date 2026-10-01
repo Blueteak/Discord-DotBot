@@ -8,7 +8,7 @@ Each user runs their own relay on an always-on machine and invites their Discord
 
 A Python CLI server with a persistent inbox, Discord replies, and MCP tools/events for Dot. Runs directly on a local computer or server. No Docker or Sites dependency.
 
-The relay receives conversation text; Dot decides when to contribute. A live Discord → Dot → Discord exchange and the Secure MCP Tunnel connection still need verification.
+The relay receives conversation text; Dot decides when to contribute. Discord receive/reply and a private ChatGPT plugin connected through Secure MCP Tunnel have been tested. ChatGPT discovers all five tools and `message.created`. Dot's event subscription, automatic wake-up, and a complete Discord → Dot → Discord exchange still need verification.
 
 ## How it works
 

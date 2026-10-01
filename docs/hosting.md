@@ -12,7 +12,30 @@ The MCP endpoint listens on `127.0.0.1:8765`. This mode intentionally trusts pro
 
 OpenAI's [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) can connect private MCP servers using outbound HTTPS. It requires a Platform tunnel, a runtime API key, and access for the target ChatGPT workspace. Configure its local HTTP target as `http://127.0.0.1:8765/mcp`. Run the tunnel client alongside DotBot, then select that tunnel when creating the private plugin. Keep tunnel credentials outside this repository.
 
-This project's tunnel and Dot event integration have not been verified live. Secure MCP Tunnel is for private connections and does not meet public plugin submission requirements. Sharing this GitHub application for individual self-deployment is separate from submitting a public plugin.
+Secure MCP Tunnel is for private connections and does not meet public plugin submission requirements. Sharing this GitHub application for individual self-deployment is separate from submitting a public plugin.
+
+### Connect through Secure MCP Tunnel
+
+1. Install OpenAI's official [tunnel client](https://github.com/openai/tunnel-client). On macOS with Homebrew, run `brew install openai/tools/tunnel-client`. Without Homebrew, use the official release for your machine, verify its checksum, and keep the bundled files together.
+2. In [Platform tunnel settings](https://platform.openai.com/settings/organization/tunnels), create a tunnel and associate it with the ChatGPT workspace that contains your Dot. Check the signed-in account and organization first.
+3. Create a runtime API key with **Restricted** permissions: **Tunnels → Read + Use** only. Choose an expiration and replace the key before it expires. Save it privately outside the checkout; never paste it into chat or a command argument.
+4. With `dotbot serve --local` running, connect the tunnel. Replace the ID and private file path below:
+
+   ```sh
+   tunnel-client runtimes connect --alias discord-relay \
+     --tunnel-id YOUR_TUNNEL_ID \
+     --runtime-api-key file:/absolute/private/path/tunnel-api-key \
+     --mcp-server-url http://127.0.0.1:8765/mcp
+   tunnel-client runtimes status discord-relay --json
+   ```
+
+5. In [ChatGPT Plugins](https://chatgpt.com/plugins), choose **Add → Create MCP App**. If this option is unavailable, enable Developer mode in ChatGPT settings. Name it, select **Connection → Tunnel**, and paste the tunnel ID. For this loopback-only setup, choose **No authentication**: access is controlled by the private tunnel and its workspace association. A public URL requires separate authentication.
+6. Acknowledge the custom-server notice, choose **Create**, then **Connect**. Open the installed plugin's app details. Confirm three read tools (`get_context`, `get_message`, `list_pending`), two write tools (`reply`, `skip`), and the `message.created` event.
+7. Give Dot the plugin name/link and the test channel ID, then follow the live test below. Creating the plugin does not create an event subscription.
+
+Verified on macOS on October 1, 2026 with tunnel-client 0.0.15: private plugin creation and connection, live discovery of all five tools and the event, and tunnel control-plane traffic. Dot's subscription, callback delivery, automatic wake-up, and end-to-end reply remain unverified.
+
+### Keep both processes running
 
 For unattended use, let your operating system's service manager start the CLI and restart it on failure. For example, on Linux, adapt this systemd unit to your account and checkout:
 
@@ -33,11 +56,13 @@ UMask=0077
 WantedBy=multi-user.target
 ```
 
-The service user must own the data directory. On macOS use launchd; on Windows use a service manager or Task Scheduler. No service is installed automatically. Prevent sleep if the device should stay available.
+The service user must own the data directory. Supervise the tunnel too, using `tunnel-client run --profile discord-relay --mcp.startup-wait-timeout 60s` after the profile has been created. Stop the initial managed process with `tunnel-client runtimes stop discord-relay` before starting the same profile under a service manager.
+
+On macOS use launchd with separate agents for the relay and tunnel, `RunAtLoad`, `KeepAlive`, private log paths, and a restrictive umask. Login agents start when the user logs in. On Windows use a service manager or Task Scheduler. The CLI installer does not install these services automatically. Prevent sleep if the device should stay available. After moving the tunnel to a service manager, verify the service and its `/healthz`, `/readyz`, and `/health?details=true` endpoints; the original `runtimes` process metadata may no longer describe the supervised process.
 
 ## Add authenticated MCP access
 
-ChatGPT requires OAuth for private tool access. Configure an OAuth 2.1 authorization provider with authorization-code flow, PKCE S256, client registration compatible with ChatGPT, and a `dotbot` scope. Configure it to issue RS256 or ES256 JWT access tokens whose audience matches the relay's public MCP URL. This repository does not provision the provider.
+For a public HTTPS endpoint instead of a private tunnel, configure an OAuth 2.1 authorization provider with authorization-code flow, PKCE S256, client registration compatible with ChatGPT, and a `dotbot` scope. Configure it to issue RS256 or ES256 JWT access tokens whose audience matches the relay's public MCP URL. This repository does not provision the provider.
 
 Create `mcp.json` in the relay data directory:
 
@@ -72,7 +97,7 @@ The service needs outbound access to Discord, the provider's public keys, and ve
 6. Inspect `dotbot show MESSAGE_ID` to confirm delivery, then check the Discord reply.
 7. Stop monitoring and confirm further messages produce no events for that subscription.
 
-Tool discovery, OAuth linking, and event delivery have not yet been validated against a live Dot. Workspace plugin and event-task controls still apply.
+ChatGPT plugin discovery through the private tunnel is verified. Dot tool calls, event delivery, and the separate public OAuth route remain unverified. Workspace plugin and event-task controls still apply.
 
 ## Local MCP development
 
