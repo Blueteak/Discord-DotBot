@@ -33,7 +33,7 @@ Secure MCP Tunnel is for private connections and does not meet public plugin sub
 6. Acknowledge the custom-server notice, choose **Create**, then **Connect**. Open the installed plugin's app details. Confirm three read tools (`get_context`, `get_message`, `list_pending`), two write tools (`reply`, `skip`), and the `message.created` event.
 7. Give Dot the plugin name/link and the test channel ID, then follow the live test below. Creating the plugin does not create an event subscription.
 
-Verified on macOS on October 1, 2026 with tunnel-client 0.0.15: private plugin creation and connection, live discovery of all five tools and the event, and tunnel control-plane traffic. Dot's subscription, callback delivery, automatic wake-up, and end-to-end reply remain unverified.
+Verified on macOS on October 1, 2026 with tunnel-client 0.0.15: private plugin creation and connection, live discovery of all five tools and the event, and a complete Discord → Dot → Discord exchange. The user confirmed an unmentioned message triggered Dot and received its reply; the relay recorded that message with `mentioned=0`, delivery status `sent`, and a Discord reply ID. This confirms the event path for that exchange. Long-term availability and subscription renewal still need testing.
 
 ### Keep both processes running
 
@@ -97,7 +97,7 @@ The service needs outbound access to Discord, the provider's public keys, and ve
 6. Inspect `dotbot show MESSAGE_ID` to confirm delivery, then check the Discord reply.
 7. Stop monitoring and confirm further messages produce no events for that subscription.
 
-ChatGPT plugin discovery through the private tunnel is verified. Dot tool calls, event delivery, and the separate public OAuth route remain unverified. Workspace plugin and event-task controls still apply.
+The private tunnel's live event and reply path is verified. The separate public OAuth route, live skip/duplicate handling, and unsubscribe behavior remain unverified. Workspace plugin and event-task controls still apply.
 
 ## Local MCP development
 
