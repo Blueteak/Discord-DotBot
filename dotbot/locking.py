@@ -4,8 +4,10 @@ import os
 
 
 @contextmanager
-def relay_lock(directory):
-    with (directory / "relay.lock").open("a+b") as stream:
+def relay_lock(directory, name="relay"):
+    if name not in ("relay", "watcher"):
+        raise ValueError("Unknown lock name.")
+    with (directory / f"{name}.lock").open("a+b") as stream:
         stream.seek(0, 2)
         if stream.tell() == 0:
             stream.write(b"\0")
@@ -19,7 +21,7 @@ def relay_lock(directory):
                 import fcntl
                 fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            raise ValueError("A relay is already running for this data directory.") from None
+            raise ValueError(f"A {name} is already running for this data directory.") from None
         try:
             yield
         finally:
