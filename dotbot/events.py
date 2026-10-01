@@ -104,10 +104,12 @@ class CallbackError(ValueError):
 
 
 class Events:
-    def __init__(self, store, config, principal):
+    def __init__(self, store, config, principal, on_delivered=None):
         self.store, self.config, self.principal = store, config, principal
         self.db = store.db
         self.lock = asyncio.Lock()
+        self.wakeup = asyncio.Event()
+        self.on_delivered = on_delivered
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS subscriptions (
                 id TEXT PRIMARY KEY, principal TEXT NOT NULL, channel_id TEXT NOT NULL,
@@ -202,7 +204,7 @@ class Events:
                 WHERE s.principal=? AND s.expires>? AND d.status='pending' AND d.next_attempt<=?
                 ORDER BY d.next_attempt LIMIT 1""", (self.principal, now, now)).fetchone()
             if row is None:
-                return
+                return False
             sub = dict(row)
             request = self.store.get(sub["request_id"])
             if not allowed(self.config, request["author_id"], request["guild_id"], request["channel_id"]):
@@ -258,8 +260,19 @@ class Events:
                 self.db.execute("""UPDATE deliveries SET status=?, attempts=?, next_attempt=?
                     WHERE subscription_id=? AND request_id=?""",
                     (status, attempts, time.time() + min(300, 2 ** attempts), sub["id"], request["id"]))
+            if status == "delivered" and self.on_delivered:
+                self.on_delivered(request)
+            return True
+
+    def wake(self):
+        self.wakeup.set()
 
     async def run(self):
         while True:
-            await self.tick()
-            await asyncio.sleep(1)
+            self.wakeup.clear()
+            if await self.tick():
+                continue  # Drain ready callbacks without a delay between messages.
+            try:
+                await asyncio.wait_for(self.wakeup.wait(), timeout=1)
+            except asyncio.TimeoutError:
+                pass  # Recover persisted work/retries and writes from other processes.

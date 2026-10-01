@@ -50,12 +50,14 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
     async def test_channel_conversation_context_and_silence(self):
         settings = dict(SETTINGS, listen="channels", audience="channel")
         relay = Relay(settings, self.store)
+        relay.on_received = Mock()
         relay._connection.user = SimpleNamespace(id=int(BOT))
         m = SimpleNamespace(id=100000000000000020, guild=SimpleNamespace(id=int(GUILD)),
             channel=SimpleNamespace(id=int(CHANNEL)), author=SimpleNamespace(id=100000000000000099, bot=False, display_name="Guest"),
             webhook_id=None, mentions=[], content="Could someone explain this?", reference=None)
         self.assertTrue(relay.intents.message_content)
         await relay.on_message(m)
+        relay.on_received.assert_called_once_with()
         first = self.store.get(str(m.id))
         self.assertEqual(first["mentioned"], 0)
         self.assertEqual(first["author_name"], "Guest")
@@ -256,6 +258,52 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 await resolver.resolve("public-looking.example.com", 443)
         await resolver.close()
+
+    async def test_callback_wakes_immediately_and_signals_acceptance(self):
+        delivered = Mock()
+        events = Events(self.store, SETTINGS, "owner", on_delivered=delivered)
+        async def verify(sub, event_id, payload):
+            return 200, json.dumps({"challenge": payload["challenge"]}).encode()
+        with patch("dotbot.events.post_signed", side_effect=verify):
+            await events.subscribe(subscription())
+        posted = asyncio.Event()
+        async def accept(*args):
+            posted.set()
+            return 200, b""
+        with patch("dotbot.events.post_signed", side_effect=accept):
+            worker = asyncio.create_task(events.run())
+            try:
+                await asyncio.sleep(0)  # Let the worker find an empty queue and wait.
+                self.store.receive(message())
+                events.wake()
+                await asyncio.wait_for(posted.wait(), timeout=0.25)
+                delivered.assert_called_once()
+                self.assertEqual(delivered.call_args.args[0]["id"], message()["id"])
+            finally:
+                worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
+
+    async def test_typing_coalesces_requests_and_stops_after_skip_or_timeout(self):
+        relay = Relay(SETTINGS, self.store)
+        first, second = message(), message("100000000000000011")
+        self.store.receive(first)
+        self.store.receive(second)
+        pulse = asyncio.Event()
+        channel = SimpleNamespace(guild=SimpleNamespace(id=int(GUILD)), typing=AsyncMock(side_effect=lambda: pulse.set()))
+        relay.get_channel = Mock(return_value=channel)
+        relay.start_typing(first)
+        task = relay.typing_tasks[CHANNEL]
+        relay.start_typing(second)
+        self.assertIs(relay.typing_tasks[CHANNEL], task)
+        await asyncio.wait_for(pulse.wait(), timeout=0.25)
+        self.store.skip(first["id"])
+        relay.typing_requests[CHANNEL][second["id"]] = 0
+        await asyncio.wait_for(task, timeout=1.5)
+        channel.typing.assert_awaited_once()
+        self.assertFalse(relay.typing_tasks)
+        relay.start_typing(first)  # Already handled messages must not show typing.
+        await relay.typing_tasks[CHANNEL]
+        channel.typing.assert_awaited_once()
 
     async def test_standard_webhooks_signature_and_rotation(self):
         from cryptography.hazmat.primitives import hashes, hmac as crypto_hmac

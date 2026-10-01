@@ -39,6 +39,9 @@ class Relay(discord.Client):
         self.config = config
         self.store = store
         self.worker = None
+        self.on_received = None
+        self.typing_tasks = {}
+        self.typing_requests = {}
 
     async def setup_hook(self):
         self.worker = asyncio.create_task(self.deliver())
@@ -74,6 +77,47 @@ class Relay(discord.Client):
                                "mentioned": int(mentioned),
                                "reply_to": str(message.reference.message_id) if getattr(message, "reference", None) else None}):
             log.info("Queued request %s", message.id)
+            if self.on_received:
+                self.on_received()
+
+    def start_typing(self, request):
+        # A successful callback confirms receipt, not that Dot has begun thinking.
+        # Give immediate feedback without making a Dot tool call a prerequisite.
+        channel_id = request["channel_id"]
+        requests = self.typing_requests.setdefault(channel_id, {})
+        requests.setdefault(request["id"], time.monotonic() + 120)
+        if channel_id not in self.typing_tasks:
+            self.typing_tasks[channel_id] = asyncio.create_task(self.keep_typing(channel_id))
+
+    async def keep_typing(self, channel_id):
+        request = None
+        try:
+            channel = None
+            next_pulse = 0
+            while True:
+                requests = self.typing_requests[channel_id]
+                now = time.monotonic()
+                for mid, deadline in list(requests.items()):
+                    request = self.store.get(mid)
+                    if (now >= deadline or request["status"] not in ("pending", "queued", "sending")
+                            or not allowed(self.config, request["author_id"], request["guild_id"], channel_id)):
+                        requests.pop(mid)
+                if not requests:
+                    return
+                if now >= next_pulse:
+                    channel = channel or self.get_channel(int(channel_id)) or await self.fetch_channel(int(channel_id))
+                    if str(getattr(getattr(channel, "guild", None), "id", None)) != request["guild_id"]:
+                        return
+                    await asyncio.wait_for(channel.typing(), timeout=10)
+                    log.info("Typing indicator sent in channel %s", channel_id)
+                    next_pulse = time.monotonic() + 7
+                await asyncio.sleep(1)
+        except Exception as exc:
+            log.warning("Typing indicator failed in channel %s: %s", channel_id,
+                        delivery_error(exc, request or {}, self.http.token))
+        finally:
+            self.typing_requests.pop(channel_id, None)
+            self.typing_tasks.pop(channel_id, None)
 
     async def send_request(self, request):
         if not allowed(self.config, request["author_id"], request["guild_id"], request["channel_id"]):
@@ -111,6 +155,10 @@ class Relay(discord.Client):
             await asyncio.sleep(1)
 
     async def close(self):
+        tasks = list(self.typing_tasks.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         if self.worker:
             self.worker.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -140,7 +188,8 @@ def run(config, store, directory, token, serve=None):
                 auth = Auth(directory, dev=serve.dev, local=serve.local)
                 if serve.dev or serve.local:
                     auth.resource = f"http://127.0.0.1:{serve.port}/mcp"
-                events = Events(store, config, auth.principal)
+                events = Events(store, config, auth.principal, on_delivered=client.start_typing)
+                client.on_received = events.wake
                 runner = web.AppRunner(make_app(config, store, events, auth), access_log=None)
                 await runner.setup()
                 await web.TCPSite(runner, serve.host, serve.port).start()

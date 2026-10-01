@@ -12,6 +12,8 @@ Discord ↔ CLI server + SQLite ↔ MCP tools/events ↔ Dot
 
 Choose the servers and channels the bot may read. New setups receive messages from people in those channels without requiring @mentions. Dot can read recent stored context, reply, or skip a message. Bot and webhook messages are ignored. Threads must be enabled by their own channel ID.
 
+New messages wake the callback worker immediately. Once OpenAI accepts the callback, the relay shows the bot's typing indicator while waiting for Dot, for up to two minutes. It stops refreshing after a reply, skip, or delivery failure. This confirms callback receipt; Dot may still decide there is nothing to add. Discord lets the indicator expire naturally after refreshes stop.
+
 The computer must stay awake and connected. State survives relay restarts. Messages sent while the bot is offline are not backfilled.
 
 ## Discord setup
