@@ -13,11 +13,11 @@ from .locking import relay_lock
 log = logging.getLogger("dotbot")
 
 
-def delivery_error(exc, request, token=None):
+def delivery_error(exc, request, token=None, secrets=()):
     # Only exception text, never request/response headers or bodies. Redact before
     # truncation so a long credential cannot leave a prefix in the saved error.
     text = str(exc.text if isinstance(exc, discord.HTTPException) else exc)
-    for value in (token, request.get("reply"), request.get("content")):
+    for value in (token, request.get("reply"), request.get("content"), *secrets):
         if value:
             text = text.replace(value, "[redacted]")
     text = re.sub(r"https?://[^\s]+", "[redacted URL]", text)
@@ -32,10 +32,14 @@ def delivery_error(exc, request, token=None):
 
 
 class Relay(discord.Client):
-    def __init__(self, config, store):
+    def __init__(self, config, store, proxy_from_env=False):
+        from .proxy import from_environment
+        proxy_options = from_environment() if proxy_from_env else {}
+        auth = proxy_options.get("proxy_auth")
+        self.proxy_secrets = (auth.encode(), auth.login, auth.password) if auth else ()
         super().__init__(intents=discord.Intents(guilds=True, guild_messages=True,
                          message_content=config.get("listen", "mentions") == "channels"),
-                         allowed_mentions=discord.AllowedMentions.none(), max_messages=None)
+                         allowed_mentions=discord.AllowedMentions.none(), max_messages=None, **proxy_options)
         self.config = config
         self.store = store
         self.worker = None
@@ -113,7 +117,7 @@ class Relay(discord.Client):
                 await asyncio.sleep(1)
         except Exception as exc:
             log.warning("Typing indicator failed in channel %s: %s", channel_id,
-                        delivery_error(exc, request or {}, self.http.token))
+                        delivery_error(exc, request or {}, self.http.token, self.proxy_secrets))
         finally:
             self.typing_requests.pop(channel_id, None)
             self.typing_tasks.pop(channel_id, None)
@@ -135,7 +139,7 @@ class Relay(discord.Client):
             # A network failure can happen after Discord accepted the message.
             # Do not blindly resend on the next tick or restart.
             status = "failed" if isinstance(exc, (discord.Forbidden, discord.NotFound)) else "uncertain"
-            details = delivery_error(exc, request, self.http.token)
+            details = delivery_error(exc, request, self.http.token, self.proxy_secrets)
             error = details if status == "failed" else f"Delivery not confirmed. {details}. Check Discord before retrying."
             self.store.finish(request["id"], status, error=error)
             log.warning("Reply %s for request %s in channel %s: %s", status,
@@ -166,10 +170,10 @@ class Relay(discord.Client):
         await super().close()
 
 
-def run(config, store, directory, token, serve=None):
+def run(config, store, directory, token, serve=None, proxy_from_env=False):
     with relay_lock(directory):
         store.recover()
-        client = Relay(config, store)
+        client = Relay(config, store, proxy_from_env=proxy_from_env)
         async def start():
             runner = None
             worker = None
