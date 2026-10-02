@@ -28,12 +28,21 @@ def data_directory(path):
     if any((parent / 'dotbot' / 'cli.py').is_file() and (parent / 'pyproject.toml').is_file()
            for parent in parents):
         raise LauncherError('Choose a private data folder outside the Discord app source tree with --data-dir.')
-    repository = next((parent for parent in parents if (parent / '.git').exists()), None)
-    if repository:
+    for repository in (parent for parent in parents if (parent / '.git').exists()):
         env = dict(os.environ)
         for key in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE'):
             env.pop(key, None)
+        env['LC_ALL'] = 'C'
         try:
+            probe = subprocess.run(['git', '-C', str(repository), 'rev-parse', '--show-toplevel'],
+                                   capture_output=True, timeout=5, env=env)
+            if probe.returncode:
+                metadata = repository / '.git'
+                placeholder = metadata.is_dir() and not any(
+                    (metadata / name).exists() for name in ('HEAD', 'config', 'index', 'objects'))
+                if probe.returncode == 128 and probe.stderr.startswith(b'fatal: not a git repository') and placeholder:
+                    continue  # Host metadata only; still inspect higher ancestors.
+                raise LauncherError('Cannot verify that the private data folder is untracked by Git.')
             tracked = subprocess.run(['git', '-C', str(repository), 'ls-files', '-z', '--', str(directory)],
                                      capture_output=True, timeout=5, env=env)
         except (OSError, subprocess.TimeoutExpired):

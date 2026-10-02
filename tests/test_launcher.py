@@ -320,6 +320,34 @@ class LauncherTests(unittest.TestCase):
             launch(self.directory, dict(settings=SETTINGS, secret=SECRET))
         self.assertFalse((self.directory/'token').exists())
 
+    def test_placeholder_git_parent_is_not_a_repository(self):
+        placeholder = Path(self.tmp.name) / '.git'
+        placeholder.mkdir()
+        result = subprocess.run(['git', '-C', self.tmp.name, 'rev-parse', '--show-toplevel'], capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        app = self.controller()
+        self.assertFalse(self.directory.exists())
+        with patch('dotbot.gui_worker.run'):
+            launch(self.directory, dict(settings=SETTINGS, secret=SECRET))
+        self.assertTrue(app.directory.joinpath('.gitignore').is_file())
+        self.assertEqual(list(placeholder.iterdir()), [])
+
+    def test_real_repository_probe_and_index_errors_fail_closed(self):
+        repository = Path(self.tmp.name)
+        subprocess.run(['git', 'init', '-q', str(repository)], check=True)
+        original = subprocess.run
+        def failed_probe(command, **kwargs):
+            if 'rev-parse' in command:
+                return subprocess.CompletedProcess(command, 128, b'', b'fatal: dubious ownership')
+            return original(command, **kwargs)
+        with patch('dotbot.launcher.subprocess.run', side_effect=failed_probe):
+            with self.assertRaises(LauncherError):
+                self.controller()
+        (repository / '.git' / 'index').write_bytes(b'invalid-index')
+        with self.assertRaises(LauncherError):
+            self.controller()
+        self.assertFalse(self.directory.exists())
+
     def test_failure_exit_status_is_generic(self):
         app = self.controller()
         app.connect(SETTINGS, SECRET)
