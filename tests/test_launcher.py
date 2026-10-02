@@ -348,6 +348,26 @@ class LauncherTests(unittest.TestCase):
             self.controller()
         self.assertFalse(self.directory.exists())
 
+    def test_nested_repository_cannot_hide_outer_tracked_token(self):
+        repository = Path(self.tmp.name)
+        subprocess.run(['git', 'init', '-q', str(repository)], check=True)
+        self.directory.mkdir()
+        token = self.directory / 'token'
+        token.write_text(SECRET)
+        subprocess.run(['git', '-C', str(repository), 'add', 'private/token'], check=True)
+        subprocess.run(['git', 'init', '-q', str(self.directory)], check=True)
+        with self.assertRaises(LauncherError):
+            self.controller()
+        with patch('dotbot.gui_worker.run') as run:
+            with self.assertRaises(LauncherError):
+                launch(self.directory, dict(settings=SETTINGS, secret='synthetic-replacement'))
+        run.assert_not_called()
+        self.assertEqual(token.read_text(), SECRET)
+        self.assertFalse((self.directory / '.gitignore').exists())
+        result = subprocess.run(['git', '-C', str(repository), 'diff', '--name-only'],
+                                capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout, '')
+
     def test_failure_exit_status_is_generic(self):
         app = self.controller()
         app.connect(SETTINGS, SECRET)
