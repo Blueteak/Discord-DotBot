@@ -197,7 +197,7 @@ class Window:
             try:
                 snowflake(self.owner.get())
             except ValueError:
-                self.status.set('Enter your 15–20 digit Discord user ID.')
+                self.status.set('Enter your 15 to 20 digit Discord user ID.')
                 return
             self.connect_after = time.monotonic() + 0.6
             self.page = 1

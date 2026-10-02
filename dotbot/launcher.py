@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import uuid
 
 from . import config
 
@@ -46,7 +47,7 @@ def validate_input(settings, secret, saved_token=False):
     try:
         settings = config.validate(settings)
     except (ValueError, KeyError, TypeError):
-        raise LauncherError('Check the owner ID, channel/server IDs and message preferences. IDs must be 15–20 digits.') from None
+        raise LauncherError('Check the owner ID, channel/server IDs and message preferences. IDs must be 15 to 20 digits.') from None
     if not isinstance(secret, str) or len(secret) > 512 or any(c.isspace() for c in secret):
         raise LauncherError('The token must be one nonempty value without spaces or newlines.')
     if not secret and not saved_token:
@@ -62,6 +63,7 @@ class Launcher:
         self.stopping = False
         self.stop_at = None
         self.started_at = 0
+        self.session = None
         self.status = 'Not connected'
         self.settings = dict(DEFAULTS)
         self.load_error = False
@@ -88,7 +90,8 @@ class Launcher:
         env = dict(os.environ)
         env.pop('DISCORD_BOT_TOKEN', None)  # Never silently override the user's saved/entered token.
         command = [sys.executable, '-m', 'dotbot.gui_worker', '--data-dir', str(self.directory)]
-        payload = json.dumps(dict(settings=settings, secret=secret, proxy=bool(proxy))) + '\n'
+        self.session = uuid.uuid4().hex
+        payload = json.dumps(dict(settings=settings, secret=secret, proxy=bool(proxy), session=self.session)) + '\n'
         if len(payload) > 8192:
             raise LauncherError('Too many channel IDs for the launcher. Use fewer IDs or the CLI.')
         self.started_at = time.time()
@@ -134,8 +137,9 @@ class Launcher:
                 uri = (self.directory / 'relay.sqlite').as_uri() + '?mode=ro'
                 with closing(sqlite3.connect(uri, uri=True, timeout=0.1)) as db:
                     row = db.execute('SELECT connected, updated_at FROM health WHERE singleton=1').fetchone()
-                connected = bool(row and row[0] and row[1] >= self.started_at and time.time() - row[1] < 15)
-            except sqlite3.Error:
+                owns_relay = (self.directory / '.gui-session').read_text() == self.session
+                connected = bool(owns_relay and row and row[0] and row[1] >= self.started_at and time.time() - row[1] < 15)
+            except (sqlite3.Error, OSError, UnicodeError):
                 pass
             self.status = 'Discord relay connected' if connected else 'Connecting / reconnecting…'
         return self.status

@@ -6,6 +6,8 @@ import os
 import signal
 import sys
 import threading
+import time
+import uuid
 
 from . import config
 from .launcher import data_directory, validate_input
@@ -30,6 +32,12 @@ def launch(directory, payload):
         secret = config.token(directory)
         store = Store(directory)
         try:
+            store.heartbeat(False)
+            store.set_access([])
+            # Ownership is published only under the relay lock, after clearing
+            # previous health. It is unique to this explicit Connect action.
+            session = str(uuid.UUID(hex=payload.get('session', uuid.uuid4().hex))).replace('-', '')
+            config.private_write(directory / '.gui-session', session)
             run(settings, store, directory, secret, proxy_from_env=bool(payload.get('proxy')), _lock_held=True)
         finally:
             store.heartbeat(False)
@@ -56,6 +64,8 @@ def main():
             while os.read(sys.stdin.fileno(), 4096):
                 pass
             os.kill(os.getpid(), signal.SIGTERM)
+            time.sleep(5)
+            os._exit(1)  # Bounded fallback if asynchronous relay cleanup hangs.
         threading.Thread(target=parent_closed, daemon=True).start()
         launch(args.data_dir, payload)
         return 0

@@ -178,6 +178,7 @@ class LauncherTests(unittest.TestCase):
         self.assertNotEqual(app.poll(), 'Discord relay connected')
         with StoreContext(self.directory) as store:
             store.heartbeat(True)
+        config.private_write(self.directory / '.gui-session', app.session)
         self.assertEqual(app.poll(), 'Discord relay connected')
         app.stop()
         app.stop()
@@ -188,6 +189,37 @@ class LauncherTests(unittest.TestCase):
         self.spawn.return_value = Process()
         self.assertTrue(app.connect(SETTINGS))
         self.assertEqual(self.spawn.call_count, 2)
+
+    def test_existing_healthy_relay_cannot_claim_new_window_ownership(self):
+        config.save(self.directory, SETTINGS, SECRET)
+        config.private_write(self.directory / '.gui-session', 'old-session')
+        app = self.controller()
+        with relay_lock(self.directory), StoreContext(self.directory) as store:
+            app.connect(SETTINGS)
+            store.heartbeat(True)  # Existing relay refreshed after Connect.
+            self.assertNotEqual(app.poll(), 'Discord relay connected')
+            self.assertTrue(store.connected())
+            app.stop()
+            self.assertEqual(self.process.terminated, 1)  # Only our new child.
+            self.assertTrue(store.connected())
+        self.process.code = 20
+        app.poll()
+        self.assertFalse(app.busy)
+
+    def test_worker_publishes_ownership_only_after_lock_and_cleared_health(self):
+        session = 'a' * 32
+        def relay(settings, store, directory, secret, **kwargs):
+            self.assertEqual((directory / '.gui-session').read_text(), session)
+            self.assertFalse(store.connected())
+            with self.assertRaises(ValueError):
+                with relay_lock(directory):
+                    pass
+        with patch('dotbot.gui_worker.run', side_effect=relay):
+            launch(self.directory, dict(settings=SETTINGS, secret=SECRET, session=session))
+        with relay_lock(self.directory), patch('dotbot.gui_worker.run'):
+            with self.assertRaises(ValueError):
+                launch(self.directory, dict(settings=SETTINGS, secret=SECRET, session='b' * 32))
+        self.assertEqual((self.directory / '.gui-session').read_text(), session)
 
     def test_stop_timeout_kills_and_reopen_does_not_connect(self):
         app = Launcher(self.directory, spawn=self.spawn, clock=Mock(return_value=0))
@@ -308,6 +340,53 @@ class LauncherTests(unittest.TestCase):
                 child.kill()
                 child.wait()
             child.stdin.close()
+            child.stdout.close()
+            child.stderr.close()
+
+    def test_parent_pipe_eof_force_exits_stuck_actual_relay_cleanup(self):
+        code = """
+import asyncio
+from pathlib import Path
+import sys
+import dotbot.relay as relay
+import dotbot.gui_worker as worker
+folder = Path(sys.argv[2])
+class FakeDiscord:
+    def __init__(self, *args, **kwargs):
+        self.worker = None
+    async def __aenter__(self):
+        return self
+    async def __aexit__(self, *args):
+        (folder / 'cleanup-started').touch()
+        await asyncio.Future()
+    async def start(self, token):
+        (folder / 'transport-ready').touch()
+        await asyncio.Future()
+relay.Relay = FakeDiscord
+raise SystemExit(worker.main())
+"""
+        child = subprocess.Popen([sys.executable, '-c', code, '--data-dir', str(self.directory)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            child.stdin.write(json.dumps(dict(settings=SETTINGS, secret=SECRET)) + '\n')
+            child.stdin.flush()
+            deadline = time.monotonic() + 5
+            while not (self.directory/'transport-ready').exists() and child.poll() is None and time.monotonic() < deadline:
+                time.sleep(.02)
+            self.assertTrue((self.directory/'transport-ready').exists())
+            start = time.monotonic()
+            child.stdin.close()
+            self.assertEqual(child.wait(timeout=8), 1)
+            self.assertLess(time.monotonic() - start, 7)
+            self.assertTrue((self.directory/'cleanup-started').exists())
+            self.assertEqual(child.stdout.read(), '')
+            self.assertEqual(child.stderr.read(), '')
+            with relay_lock(self.directory):
+                pass
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait()
             child.stdout.close()
             child.stderr.close()
 
