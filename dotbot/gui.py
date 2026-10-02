@@ -73,7 +73,7 @@ class Window:
         self.step.pack(anchor='w', pady=(6, 0))
         footer = ttk.Frame(root, padding=(32, 8, 32, 20))
         footer.pack(side='bottom', fill='x')
-        status_area = ttk.Frame(footer, height=62)
+        status_area = ttk.Frame(footer, height=76)
         status_area.pack(fill='x')
         status_area.pack_propagate(False)
         self.status_label = ttk.Label(status_area, textvariable=self.status, style='Status.TLabel', wraplength=1050)
