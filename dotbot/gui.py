@@ -148,7 +148,8 @@ class Window:
                 self.controls.append(widget)
             self.label('Follows Discord permissions, including new channels.' if self.scope.get() == 'accessible'
                        else 'Enter server and channel IDs on the next page.', help=True)
-            self.check('Use host HTTP proxy', self.proxy)
+            self.check('Use this computer’s network proxy', self.proxy)
+            self.label('Routes Discord traffic through this computer’s configured gateway.\nRequired on Dot’s cloud computer. Usually off on your own computer.', help=True)
             self.button('Message options', self.show_preferences)
             self.label('Connect saves settings and starts the relay.', help=True)
             self.action.configure(text='Connect' if self.scope.get() == 'accessible' else 'Next')

@@ -37,6 +37,12 @@ class LayoutTests(unittest.TestCase):
                                     self.assertFalse(any(text.startswith('Handle') for text in labels))
                                     self.assertIn('Discord user ID - 15 to 20 digits', labels)
                                     self.assertIn('Use Copy User ID, not your @handle.', labels)
+                                if page == 1:
+                                    labels = [str(w.cget('text')) for w in window.body.winfo_children() if isinstance(w, ttk.Label)]
+                                    checks = [str(w.cget('text')) for w in window.body.winfo_children() if isinstance(w, ttk.Checkbutton)]
+                                    self.assertIn('Use this computer’s network proxy', checks)
+                                    self.assertIn('Routes Discord traffic through this computer’s configured gateway.\nRequired on Dot’s cloud computer. Usually off on your own computer.', labels)
+                                    self.assertFalse(window.proxy.get())
                                 self.assertLessEqual(window.body.winfo_reqheight(), window.body.winfo_height(), (size, page, scope))
                                 for widget in window.body.winfo_children():
                                     self.assertGreaterEqual(widget.winfo_y(), 0)
