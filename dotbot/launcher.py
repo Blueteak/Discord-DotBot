@@ -47,7 +47,7 @@ def validate_input(settings, secret, saved_token=False):
     try:
         settings = config.validate(settings)
     except (ValueError, KeyError, TypeError):
-        raise LauncherError('Check the owner ID, channel/server IDs and message preferences. IDs must be 15 to 20 digits.') from None
+        raise LauncherError('Check IDs: use 15 to 20 digits. Scoped mode needs server and channel IDs.') from None
     if not isinstance(secret, str) or len(secret) > 512 or any(c.isspace() for c in secret):
         raise LauncherError('The token must be one nonempty value without spaces or newlines.')
     if not secret and not saved_token:

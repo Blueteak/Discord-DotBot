@@ -68,11 +68,11 @@ After completing the Discord setup above, ask Dot to install this project on its
 dotbot --data-dir /workspace/shared/discord-dotbot-data gui
 ```
 
-Open that cloud computer view in Codex to interact with the window yourself. The app uses large text, fields and buttons for a phone viewing the remote desktop. Opening it never connects or saves anything.
+Open that cloud computer view in Codex to interact with the window yourself. The app uses compact fixed pages with readable fields and buttons for a phone viewing the remote desktop; no scrolling is needed at its default 1180 by 840 size. Opening it never connects or saves anything.
 
 1. Enter your stable **Discord user ID**. A handle is optional and is display-only.
-2. Paste the bot token into the **hidden** field yourself. Keep it out of chat. An existing saved token is never displayed; use **Replace saved token** only when needed.
-3. Select **Next**, choose accessible channels or specific IDs, and click **Connect / Start relay**. That click saves the settings privately and starts the connection. Enable the proxy checkbox only if the host requires its HTTP proxy environment.
+2. Paste the bot token into the **hidden** field yourself. Keep it out of chat. An existing saved token is never displayed; use **Replace token** only when needed.
+3. Select **Next**, choose accessible channels or specific IDs, and click **Connect**. That click saves the settings privately and starts the connection. Enable the proxy checkbox only if the host requires its HTTP proxy environment.
 4. Ask Dot to keep **one active watcher** running against the same data folder. “Discord relay connected” confirms only the Discord connection, not an active Dot watcher.
 
 **Stop relay** ends the relay started by this window. Closing the window also stops that relay and waits for it to exit; after five seconds it can force-stop an unresponsive child. Reopening the app never reconnects automatically. If the window process crashes, closing its private pipe requests child termination and force-exits after five seconds if cleanup hangs. An uncertain in-flight reply is not automatically resent after restart; inspect Discord before retrying. Another relay using this data folder is not stopped or reconfigured by the app.
