@@ -10,7 +10,7 @@ Each user runs their own relay on an always-on machine and invites their Discord
 Discord ↔ relay + SQLite ↔ one active Dot watcher
 ```
 
-Choose the servers and channels the bot may read. New setups receive messages from people in those channels without requiring @mentions. Dot can read recent stored context, reply, or skip a message. Bot and webhook messages are ignored. Threads must be enabled by their own channel ID.
+Choose the servers and channels the bot may read. New setups receive messages from people in those channels without requiring @mentions. Dot can read recent stored context, reply, or skip a message. Bot and webhook messages are ignored. In scoped mode, threads must be enabled by their own channel ID. Accessible mode follows current Discord permissions.
 
 In the optional MCP Events mode, new messages notify the callback worker immediately; this does not guarantee immediate or durable Dot wake-up. Dot reads the message and context to decide whether it is directed at it. For those messages, Dot calls `begin_reply` before doing further work, showing the bot's typing indicator for up to two minutes. Other messages are skipped silently. Typing stops refreshing after a reply, skip, or delivery failure; Discord lets the indicator expire naturally after refreshes stop.
 
@@ -89,6 +89,18 @@ Use `dotbot run` for Discord and local CLI access without an HTTP endpoint. Stop
 On a host where Dot can run local commands, use [the single-watcher guide](docs/watcher.md). After setup, keep `dotbot run` running and have one active Dot session call `dotbot watch`, handle the result, and repeat. No tunnel, public endpoint, OpenAI API key, or separate response model is needed for this local path.
 
 A local process cannot by itself wake a dormant Dot. If your Dot cannot access this host or remain in an active waiting session, this path is unavailable; use the separately configured MCP path and its platform-dependent lifecycle.
+
+## All accessible guild channels (opt in)
+
+For a new installation, use `dotbot setup --scope accessible`, then `dotbot run` and the [active watcher](docs/watcher.md). This mode asks for your Discord handle (optional, display only), your stable Discord user ID, and the bot token privately; it does not ask for server/channel IDs. Handles cannot be safely resolved offline: enable Discord Developer Mode and use Copy User ID, rather than guessing a handle-to-ID mapping. Agents may append `--token-file /private/path/bot-token`. Message Content Intent must be enabled. For noninteractive setup, use `dotbot setup --scope accessible --owner YOUR_ID --owner-handle YOUR_HANDLE --token-file /private/path/bot-token`. Omit the optional handle if unknown. Add `--audience owner` for owner-only listening. Message outputs include `is_owner`, derived strictly from the stored author ID and configured owner ID; copied or changed handles do not affect it. A verified author ID is not permission to disclose private information to the channel.
+
+This explicit scope includes every guild the bot joins and every supported channel it can currently view, read history in, and send to. New guilds, newly accessible channels, and active threads become eligible while the relay is running; no channel enumeration is frozen at startup. Discord permissions are the boundary. Public threads need Send Messages in Threads; private threads also need bot membership or Manage Threads. Archived/locked threads are excluded; the relay does not join or unarchive threads or change permissions. DMs, bots, and webhooks remain excluded. Mentions are not required: Dot should respond when requested, including natural-language address, and skip unrelated chatter.
+
+Existing installations remain scoped to their explicit nonempty server/channel lists. Empty lists never enable global scope. To opt an existing installation in, stop the relay, run `dotbot configure --scope accessible --listen channels --audience channel`, then restart. To return to scoped mode, stop it and use `dotbot configure --scope scoped --owner OWNER_ID --guilds GUILD_ID --channels CHANNEL_ID`. Existing lists are retained when switching modes but are ignored in accessible mode.
+
+Accessible-mode reads and reply/skip commands require a connected relay and a fresh permission snapshot (up to 15 seconds old). The snapshot is refreshed from Gateway state on changes and each relay tick; it is not a live Discord authorization request per read. Unknown, stale, disconnected, or revoked access hides stored work. Pending messages remain stored and can return if access is restored; review stale requests before responding. Context stays in the original guild and channel, and responses target only the stored request's channel. Before sending, permissions are rechecked; denied sends fail, and ambiguous delivery remains uncertain without automatic retry. A permission change can race an in-flight read/send, and already-returned context cannot be retracted. Local database access remains trusted.
+
+MCP Events subscriptions stay pinned to individual channel IDs. Discovery lists currently accessible channels, but existing subscriptions never expand to newly accessible channels or guilds. Subscribe explicitly for each new channel if using MCP Events; the local watcher sees eligible pending work automatically. Revoked subscriptions can still be unsubscribed. No subscription, tunnel, or connected-app permission is changed by opting in.
 
 ## Hosts requiring an outbound proxy
 

@@ -124,18 +124,21 @@ class Events:
             );
         """)
 
+    def channel_ids(self):
+        return self.store.accessible_ids() if self.config.get("scope") == "accessible" else self.config["channel_ids"]
+
     def definition(self):
         return {"name": NAME, "description": "A permitted person sent a message in an enabled Discord channel. Read the message and context to decide whether it is directed at you. If it is, call begin_reply promptly before preparing your answer, then reply. Otherwise skip it without typing or replying.",
                 "delivery": ["webhook"],
-                "inputSchema": {"type": "object", "properties": {"channel_id": {"type": "string", "enum": self.config["channel_ids"]}},
+                "inputSchema": {"type": "object", "properties": {"channel_id": {"type": "string", "enum": self.channel_ids()}},
                                 "required": ["channel_id"], "additionalProperties": False},
                 "payloadSchema": {"type": "object", "properties": {name: {"type": "string"} for name in
                                  ("message_id", "guild_id", "channel_id", "author_id", "url")},
                                   "required": ["message_id", "guild_id", "channel_id", "author_id", "url"], "additionalProperties": False}}
 
-    def identity(self, params):
+    def identity(self, params, check_access=True):
         args, delivery = params["arguments"], params["delivery"]
-        if params["name"] != NAME or set(args) != {"channel_id"} or args["channel_id"] not in self.config["channel_ids"]:
+        if params["name"] != NAME or set(args) != {"channel_id"} or (check_access and args["channel_id"] not in self.channel_ids()):
             raise ValueError("Unknown event or unauthorized channel.")
         if delivery["mode"] != "webhook":
             raise ValueError("Only webhook delivery is supported.")
@@ -184,7 +187,7 @@ class Events:
 
     async def unsubscribe(self, params):
         async with self.lock:
-            sid, _, _ = self.identity(params)
+            sid, _, _ = self.identity(params, check_access=False)
             with self.db:
                 self.db.execute("DELETE FROM subscriptions WHERE id=? AND principal=?", (sid, self.principal))
                 self.db.execute("DELETE FROM deliveries WHERE subscription_id=?", (sid,))
@@ -206,7 +209,7 @@ class Events:
                 return False
             sub = dict(row)
             request = self.store.get(sub["request_id"])
-            if not allowed(self.config, request["author_id"], request["guild_id"], request["channel_id"]):
+            if not self.store.visible(self.config, request):
                 status = "stopped"
             else:
                 payload = {"eventId": "discord_" + request["id"], "name": NAME,

@@ -17,7 +17,9 @@ def parser():
                       help="State directory; default: ~/.discord-dotbot or DOTBOT_DATA_DIR.")
     commands = root.add_subparsers(dest="command", required=True)
     setup = commands.add_parser("setup", help="Save local configuration and a secret bot token.")
+    setup.add_argument("--scope", choices=["scoped", "accessible"], default="scoped")
     setup.add_argument("--owner", help="Your Discord user ID")
+    setup.add_argument("--owner-handle", help="Optional Discord handle for display only; never used for authorization")
     setup.add_argument("--guilds", help="Comma-separated server IDs")
     setup.add_argument("--channels", help="Comma-separated channel or thread IDs")
     setup.add_argument("--token-file", type=Path, help="Read token from a private file instead of prompting")
@@ -25,6 +27,11 @@ def parser():
     setup.add_argument("--audience", choices=["channel", "owner"], default="channel",
                        help="Whose messages to receive inside allowed channels; default: channel")
     configure = commands.add_parser("configure", help="Change listening scope. Stop the server first.")
+    configure.add_argument("--scope", choices=["scoped", "accessible"])
+    configure.add_argument("--owner")
+    configure.add_argument("--owner-handle")
+    configure.add_argument("--guilds")
+    configure.add_argument("--channels")
     configure.add_argument("--listen", choices=["channels", "mentions"])
     configure.add_argument("--audience", choices=["channel", "owner"])
     credential = commands.add_parser("token", help="Replace the bot token using a hidden prompt or private file.")
@@ -74,10 +81,15 @@ def read_token(args):
 def setup(args):
     if (args.data_dir / "config.json").exists() or (args.data_dir / "token").exists():
         raise ValueError("Setup already exists. Edit config.json or the token file directly; stop the relay first.")
+    if args.scope == "accessible" and (args.guilds or args.channels):
+        raise ValueError("Accessible scope uses Discord permissions; omit --guilds and --channels.")
     settings = config.validate({
-        "owner_id": args.owner or input("Your Discord user ID: "),
-        "guild_ids": (args.guilds or input("Server IDs, comma-separated: ")).split(","),
-        "channel_ids": (args.channels or input("Channel or thread IDs, comma-separated: ")).split(","),
+        "owner_id": args.owner or input("Your Discord user ID (Copy User ID): "),
+        "owner_handle": args.owner_handle if args.owner_handle is not None else
+                        (input("Your Discord handle (optional, display only): ") if sys.stdin.isatty() else ""),
+        "guild_ids": (args.guilds or input("Server IDs, comma-separated: ")).split(",") if args.scope == "scoped" else [],
+        "channel_ids": (args.channels or input("Channel or thread IDs, comma-separated: ")).split(",") if args.scope == "scoped" else [],
+        "scope": args.scope,
         "listen": args.listen,
         "audience": args.audience,
     })
@@ -104,9 +116,15 @@ def main():
                         config.private_write(args.data_dir / "token", read_token(args) + "\n")
                         print(json.dumps({"token_saved": True, "data_dir": str(args.data_dir)}))
                         return
-                    for key in ("listen", "audience"):
+                    for key in ("listen", "audience", "scope"):
                         if getattr(args, key) is not None:
                             settings[key] = getattr(args, key)
+                    if settings.get("scope") == "accessible" and (args.guilds or args.channels):
+                        raise ValueError("Accessible scope uses Discord permissions; omit --guilds and --channels.")
+                    for option, key in (("owner", "owner_id"), ("owner_handle", "owner_handle"), ("guilds", "guild_ids"), ("channels", "channel_ids")):
+                        value = getattr(args, option)
+                        if value is not None:
+                            settings[key] = value if option in ("owner", "owner_handle") else value.split(",")
                     path = args.data_dir / "config.json"
                     config.private_write(path, json.dumps(config.validate(settings), indent=2) + "\n")
                 print(json.dumps(settings, indent=2))
@@ -120,17 +138,19 @@ def main():
                 run(settings, store, args.data_dir, config.token(args.data_dir), args if args.command == "serve" else None,
                     proxy_from_env=args.proxy_from_env)
                 return
+            if hasattr(args, "id") and not store.visible(settings, store.get(args.id)):
+                raise ValueError("Request is no longer accessible.")
             if args.command == "watch":
                 from .watcher import wait
                 result = wait(store, settings, args.data_dir, args.timeout)
             elif args.command == "inbox":
-                result = store.list(args.status, args.limit)
+                result = store.visible_list(settings, args.status, args.limit)
             elif args.command == "show":
-                result = store.get(args.id)
+                result = store.present(settings, store.get(args.id))
             elif args.command == "context":
-                result = store.context(args.id)
+                result = [store.present(settings, m) for m in store.context(args.id) if store.visible(settings, m)]
             elif args.command == "skip":
-                result = store.skip(args.id)
+                result = store.present(settings, store.skip(args.id))
             elif args.command == "reply":
                 text = args.file.read_text() if args.file else sys.stdin.read()
                 row = store.reply(args.id, text)

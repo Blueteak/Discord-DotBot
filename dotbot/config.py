@@ -13,10 +13,17 @@ def snowflake(value):
 
 def validate(config):
     config = dict(config)
+    config.setdefault("scope", "scoped")
+    if config["scope"] not in ("scoped", "accessible"):
+        raise ValueError("scope must be scoped or accessible.")
     config["owner_id"] = snowflake(config["owner_id"])
+    handle = config.get("owner_handle", "")
+    if not isinstance(handle, str) or len(handle) > 100:
+        raise ValueError("owner_handle must be text of at most 100 characters.")
+    config["owner_handle"] = handle.strip()
     for key in ("guild_ids", "channel_ids"):
-        values = config[key]
-        if not isinstance(values, list) or not values:
+        values = config.get(key, [])
+        if not isinstance(values, list) or (not values and config["scope"] == "scoped"):
             raise ValueError(f"{key} must be a nonempty list of Discord IDs.")
         config[key] = list(dict.fromkeys(snowflake(v) for v in values))
     # Keep older installations' access scope unchanged.
@@ -71,5 +78,6 @@ def private_write(path, content):
 def allowed(config, author_id, guild_id, channel_id, is_bot=False, webhook=False):
     return (not is_bot and not webhook
             and (config.get("audience", "owner") == "channel" or str(author_id) == config["owner_id"])
-            and str(guild_id) in config["guild_ids"]
-            and str(channel_id) in config["channel_ids"])
+            and guild_id is not None and str(guild_id) != "None"
+            and (config.get("scope", "scoped") == "accessible"
+                 or (str(guild_id) in config["guild_ids"] and str(channel_id) in config["channel_ids"])))

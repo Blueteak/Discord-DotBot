@@ -1,7 +1,7 @@
 import sqlite3
 import time
 
-from .config import private_directory
+from .config import allowed, private_directory
 
 
 class Store:
@@ -22,6 +22,10 @@ class Store:
                 reply TEXT,
                 reply_id TEXT,
                 error TEXT
+            );
+            CREATE TABLE IF NOT EXISTS channel_access (
+                channel_id TEXT PRIMARY KEY, guild_id TEXT NOT NULL,
+                checked_at REAL NOT NULL
             );
             CREATE TABLE IF NOT EXISTS health (
                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -50,6 +54,35 @@ class Store:
         self.db.commit()
         (directory / "relay.sqlite").chmod(0o600)
 
+    def set_access(self, channels):
+        with self.db:
+            self.db.execute("DELETE FROM channel_access")
+            self.db.executemany("INSERT INTO channel_access VALUES (?, ?, ?)",
+                                [(str(channel), str(guild), time.time()) for guild, channel in channels])
+
+    def revoke_access(self, channel_id):
+        with self.db:
+            self.db.execute("DELETE FROM channel_access WHERE channel_id=?", (str(channel_id),))
+
+    def connected(self):
+        row = self.db.execute("SELECT connected, updated_at FROM health WHERE singleton=1").fetchone()
+        return bool(row and row["connected"] and time.time() - row["updated_at"] < 15)
+
+    def accessible_ids(self):
+        if not self.connected():
+            return []
+        return [r[0] for r in self.db.execute(
+            "SELECT channel_id FROM channel_access WHERE checked_at>?", (time.time() - 15,))]
+
+    def visible(self, settings, message):
+        if not allowed(settings, message["author_id"], message["guild_id"], message["channel_id"]):
+            return False
+        if settings.get("scope", "scoped") != "accessible":
+            return True
+        row = self.db.execute("SELECT 1 FROM channel_access WHERE guild_id=? AND channel_id=? AND checked_at>?",
+                              (message["guild_id"], message["channel_id"], time.time() - 15)).fetchone()
+        return bool(row and self.connected())
+
     def close(self):
         self.db.close()
 
@@ -70,6 +103,30 @@ class Store:
             rows = self.db.execute("SELECT * FROM requests WHERE status=? ORDER BY received_at LIMIT ?",
                                    (status, limit))
         return [dict(row) for row in rows]
+
+    @staticmethod
+    def present(settings, message):
+        return {**message, "is_owner": bool(settings.get("owner_id") and str(message["author_id"]) == settings["owner_id"])}
+
+    def visible_list(self, settings, status="pending", limit=50):
+        query = "SELECT * FROM requests"
+        parameters = ()
+        if status != "all":
+            query += " WHERE status=?"
+            parameters = (status,)
+        query += " ORDER BY received_at " + ("DESC" if status == "all" else "ASC")
+        result = []
+        cursor = self.db.execute(query, parameters)
+        try:
+            for row in cursor:
+                message = dict(row)
+                if self.visible(settings, message):
+                    result.append(self.present(settings, message))
+                    if len(result) >= limit:
+                        break
+        finally:
+            cursor.close()
+        return result
 
     def get(self, request_id):
         row = self.db.execute("SELECT * FROM requests WHERE id=?", (request_id,)).fetchone()

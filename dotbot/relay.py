@@ -47,6 +47,73 @@ class Relay(discord.Client):
         self.typing_tasks = {}
         self.typing_requests = {}
 
+    def channel_accessible(self, channel):
+        guild = getattr(channel, "guild", None)
+        member = getattr(guild, "me", None)
+        if not guild or not member or getattr(guild, "unavailable", False):
+            return False
+        try:
+            permissions = channel.permissions_for(member)
+            thread = isinstance(channel, discord.Thread)
+            if thread and (channel.archived or channel.locked
+                           or (channel.is_private() and channel.me is None and not permissions.manage_threads)):
+                return False
+            return bool(permissions.view_channel and permissions.read_message_history
+                        and (permissions.send_messages_in_threads if thread else permissions.send_messages)
+                        and isinstance(channel, (discord.TextChannel, discord.VoiceChannel, discord.StageChannel, discord.Thread)))
+        except (AttributeError, discord.ClientException):
+            return False
+
+    def refresh_access(self):
+        if self.config.get("scope") == "accessible":
+            self.store.set_access((guild.id, channel.id) for guild in self.guilds
+                                  for channel in [*guild.channels, *guild.threads]
+                                  if self.channel_accessible(channel))
+
+    async def on_guild_channel_update(self, before, after):
+        self.refresh_access()
+
+    async def on_guild_channel_create(self, channel):
+        self.refresh_access()
+
+    async def on_guild_channel_delete(self, channel):
+        self.refresh_access()
+
+    async def on_thread_join(self, thread):
+        self.refresh_access()
+
+    async def on_thread_update(self, before, after):
+        self.refresh_access()
+
+    async def on_raw_thread_delete(self, payload):
+        self.store.revoke_access(payload.thread_id)
+
+    async def on_guild_role_update(self, before, after):
+        self.refresh_access()
+
+    async def on_guild_role_delete(self, role):
+        self.refresh_access()
+
+    async def on_member_update(self, before, after):
+        if self.user and after.id == self.user.id:
+            self.refresh_access()
+
+    async def on_guild_unavailable(self, guild):
+        self.refresh_access()
+
+    async def on_resumed(self):
+        self.refresh_access()
+        self.store.heartbeat(True)
+
+    async def on_thread_remove(self, thread):
+        self.store.revoke_access(thread.id)
+
+    async def on_guild_remove(self, guild):
+        self.refresh_access()
+
+    async def on_guild_join(self, guild):
+        self.refresh_access()
+
     async def setup_hook(self):
         self.worker = asyncio.create_task(self.deliver())
         def worker_done(task):
@@ -56,16 +123,25 @@ class Relay(discord.Client):
         self.worker.add_done_callback(worker_done)
 
     async def on_ready(self):
+        self.refresh_access()
         self.store.heartbeat(True)
         log.info("Connected as %s", self.user)
 
     async def on_disconnect(self):
         self.store.heartbeat(False)
+        self.store.set_access([])
 
     async def on_message(self, message):
         if not allowed(self.config, message.author.id, message.guild.id if message.guild else None,
                        message.channel.id, message.author.bot, bool(message.webhook_id)):
             return
+        if self.config.get("scope") == "accessible":
+            if not self.channel_accessible(message.channel):
+                self.store.revoke_access(message.channel.id)
+                return
+            with self.store.db:
+                self.store.db.execute("INSERT OR REPLACE INTO channel_access VALUES (?, ?, ?)",
+                                      (str(message.channel.id), str(message.guild.id), time.time()))
         if not self.user:
             return
         mentioned = any(user.id == self.user.id for user in message.mentions)
@@ -103,7 +179,7 @@ class Relay(discord.Client):
                 for mid, deadline in list(requests.items()):
                     request = self.store.get(mid)
                     if (now >= deadline or request["status"] not in ("pending", "queued", "sending")
-                            or not allowed(self.config, request["author_id"], request["guild_id"], channel_id)):
+                            or not self.store.visible(self.config, request)):
                         requests.pop(mid)
                 if not requests:
                     return
@@ -123,13 +199,17 @@ class Relay(discord.Client):
             self.typing_tasks.pop(channel_id, None)
 
     async def send_request(self, request):
-        if not allowed(self.config, request["author_id"], request["guild_id"], request["channel_id"]):
+        if not self.store.visible(self.config, request):
             self.store.finish(request["id"], "failed", error="Destination no longer permitted by configuration.")
             return
         try:
             channel = self.get_channel(int(request["channel_id"])) or await self.fetch_channel(int(request["channel_id"]))
             if str(getattr(getattr(channel, "guild", None), "id", None)) != request["guild_id"]:
                 self.store.finish(request["id"], "failed", error="Channel does not belong to the stored server.")
+                return
+            if self.config.get("scope") == "accessible" and not self.channel_accessible(channel):
+                self.store.revoke_access(channel.id)
+                self.store.finish(request["id"], "failed", error="Channel access is no longer available.")
                 return
             reference = discord.MessageReference(message_id=int(request["id"]),
                 channel_id=int(request["channel_id"]), guild_id=int(request["guild_id"]), fail_if_not_exists=True)
@@ -139,6 +219,8 @@ class Relay(discord.Client):
             # A network failure can happen after Discord accepted the message.
             # Do not blindly resend on the next tick or restart.
             status = "failed" if isinstance(exc, (discord.Forbidden, discord.NotFound)) else "uncertain"
+            if isinstance(exc, (discord.Forbidden, discord.NotFound)):
+                self.store.revoke_access(request["channel_id"])
             details = delivery_error(exc, request, self.http.token, self.proxy_secrets)
             error = details if status == "failed" else f"Delivery not confirmed. {details}. Check Discord before retrying."
             self.store.finish(request["id"], status, error=error)
@@ -150,6 +232,8 @@ class Relay(discord.Client):
 
     async def deliver(self):
         while not self.is_closed():
+            if self.is_ready():
+                self.refresh_access()
             self.store.heartbeat(self.is_ready())
             if self.is_ready():
                 request = self.store.claim()
@@ -167,11 +251,13 @@ class Relay(discord.Client):
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self.worker
         self.store.heartbeat(False)
+        self.store.set_access([])
         await super().close()
 
 
 def run(config, store, directory, token, serve=None, proxy_from_env=False):
     with relay_lock(directory):
+        store.set_access([])
         store.recover()
         client = Relay(config, store, proxy_from_env=proxy_from_env)
         async def start():
