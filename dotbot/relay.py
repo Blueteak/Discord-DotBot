@@ -6,6 +6,7 @@ import signal
 import time
 
 import discord
+from discord.state import ConnectionState
 
 from .config import allowed
 from .locking import relay_lock
@@ -31,7 +32,37 @@ def delivery_error(exc, request, token=None, secrets=()):
     return f"{details}: {text or '(no error text)'}"
 
 
+class RelayState(ConnectionState):
+    """Normalize self membership in the pinned discord.py gateway cache.
+
+    discord.py 2.6.4 stores sync membership separately from Thread.me and
+    leaves self membership cached after removal. Apply authoritative payloads
+    synchronously, before dispatched handlers or delivery can inspect the cache.
+    """
+
+    def parse_thread_list_sync(self, data):
+        super().parse_thread_list_sync(data)
+        guild = self._get_guild(int(data["guild_id"]))
+        if guild:
+            for item in data.get("threads", []):
+                thread = guild.get_thread(int(item["id"]))
+                if thread:
+                    thread.me = thread._members.get(self.self_id) or thread.me
+
+    def parse_thread_members_update(self, data):
+        super().parse_thread_members_update(data)
+        if self.self_id in {int(mid) for mid in data.get("removed_member_ids", [])}:
+            guild = self._get_guild(int(data["guild_id"]))
+            thread = guild and guild.get_thread(int(data["id"]))
+            if thread:
+                thread.me = None
+                thread._pop_member(self.self_id)
+
+
 class Relay(discord.Client):
+    def _get_state(self, **options):
+        return RelayState(dispatch=self.dispatch, handlers=self._handlers, hooks=self._hooks, http=self.http, **options)
+
     def __init__(self, config, store, proxy_from_env=False):
         from .proxy import from_environment
         proxy_options = from_environment() if proxy_from_env else {}
@@ -40,6 +71,7 @@ class Relay(discord.Client):
         super().__init__(intents=discord.Intents(guilds=True, guild_messages=True,
                          message_content=config.get("listen", "mentions") == "channels"),
                          allowed_mentions=discord.AllowedMentions.none(), max_messages=None, **proxy_options)
+        self.gateway_connected = False
         self.config = config
         self.store = store
         self.worker = None
@@ -47,7 +79,20 @@ class Relay(discord.Client):
         self.typing_tasks = {}
         self.typing_requests = {}
 
+    def dispatch(self, event, /, *args, **kwargs):
+        # is_ready remains set during resumable reconnects. Invalidate before
+        # scheduling asynchronous handlers so no intervening tick can restore access.
+        if event == "disconnect":
+            self.gateway_connected = False
+            self.store.heartbeat(False)
+            self.store.set_access([])
+        elif event in ("ready", "resumed"):
+            self.gateway_connected = True
+        super().dispatch(event, *args, **kwargs)
+
     def channel_accessible(self, channel):
+        if not self.gateway_connected:
+            return False
         guild = getattr(channel, "guild", None)
         member = getattr(guild, "me", None)
         if not guild or not member or getattr(guild, "unavailable", False):
@@ -102,6 +147,7 @@ class Relay(discord.Client):
         self.refresh_access()
 
     async def on_resumed(self):
+        self.gateway_connected = True
         self.refresh_access()
         self.store.heartbeat(True)
 
@@ -123,11 +169,13 @@ class Relay(discord.Client):
         self.worker.add_done_callback(worker_done)
 
     async def on_ready(self):
+        self.gateway_connected = True
         self.refresh_access()
         self.store.heartbeat(True)
         log.info("Connected as %s", self.user)
 
     async def on_disconnect(self):
+        self.gateway_connected = False
         self.store.heartbeat(False)
         self.store.set_access([])
 
@@ -232,16 +280,17 @@ class Relay(discord.Client):
 
     async def deliver(self):
         while not self.is_closed():
-            if self.is_ready():
+            if self.gateway_connected:
                 self.refresh_access()
-            self.store.heartbeat(self.is_ready())
-            if self.is_ready():
+            self.store.heartbeat(self.gateway_connected)
+            if self.gateway_connected:
                 request = self.store.claim()
                 if request:
                     await self.send_request(request)
             await asyncio.sleep(1)
 
     async def close(self):
+        self.gateway_connected = False
         tasks = list(self.typing_tasks.values())
         for task in tasks:
             task.cancel()
@@ -257,6 +306,7 @@ class Relay(discord.Client):
 
 def run(config, store, directory, token, serve=None, proxy_from_env=False):
     with relay_lock(directory):
+        store.heartbeat(False)
         store.set_access([])
         store.recover()
         client = Relay(config, store, proxy_from_env=proxy_from_env)

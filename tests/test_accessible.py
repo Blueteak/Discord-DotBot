@@ -32,6 +32,7 @@ class AccessibleTests(unittest.IsolatedAsyncioTestCase):
         self.guild = SimpleNamespace(id=100, me=SimpleNamespace(id=999), unavailable=False, channels=[], threads=[])
         self.relay._connection._guilds = {100: self.guild}
         self.channel = self.channel_for(200)
+        self.relay.gateway_connected = True
         self.store.heartbeat(True)
 
     async def asyncTearDown(self):

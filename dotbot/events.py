@@ -209,6 +209,14 @@ class Events:
                 return False
             sub = dict(row)
             request = self.store.get(sub["request_id"])
+            if self.config.get("scope") == "accessible":
+                # Lack of current evidence during startup/reconnect is temporary.
+                # Keep the durable delivery pending without consuming attempts.
+                snapshot = self.db.execute(
+                    "SELECT checked_at FROM channel_access WHERE channel_id=?",
+                    (request["channel_id"],)).fetchone()
+                if not self.store.connected() or (snapshot and snapshot["checked_at"] <= now - 15):
+                    return False
             if not self.store.visible(self.config, request):
                 status = "stopped"
             else:
