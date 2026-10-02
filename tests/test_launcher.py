@@ -241,12 +241,14 @@ class LauncherTests(unittest.TestCase):
         window.connect_after = 0
         window.status = Mock()
         window.secret = Mock(get=Mock(return_value=SECRET))
+        window.owner = Mock(get=Mock(return_value='invalid'))
         window.values = Mock(return_value=dict(SETTINGS, owner_id='invalid'))
         window.render = Mock()
         window.next_or_connect()
         self.assertEqual(window.page, 0)
         self.assertIn('15 to 20', window.status.set.call_args.args[0])
         window.values.return_value = SETTINGS
+        window.owner.get.return_value = SETTINGS['owner_id']
         window.next_or_connect()
         self.assertEqual(window.page, 1)
         window.status.set.assert_called_with('Not connected')
@@ -258,6 +260,32 @@ class LauncherTests(unittest.TestCase):
         window.next_or_connect()
         self.assertEqual(window.page, 1)
         self.spawn.assert_not_called()
+
+    def test_gui_owner_id_blocks_handles_and_non_ascii_digits(self):
+        window = Window.__new__(Window)
+        window.controller = self.controller()
+        window.closing = False
+        window.status = Mock()
+        window.secret = Mock(get=Mock(return_value=SECRET))
+        window.owner = Mock()
+        window.values = Mock(return_value=SETTINGS)
+        window.render = Mock()
+        for value in ('@someone', 'someone', '123abc456789012', '１２３４５６７８９０１２３４５',
+                      '1' * 14, '1' * 21, ''):
+            window.page = 0
+            window.connect_after = 0
+            window.owner.get.return_value = value
+            window.next_or_connect()
+            self.assertEqual(window.page, 0)
+            self.assertEqual(window.status.set.call_args.args[0], 'Use a 15 to 20 digit user ID, not your @handle.')
+        for value in ('1' * 15, '1' * 20, ' 123456789012345 '):
+            window.page = 0
+            window.connect_after = 0
+            window.owner.get.return_value = value
+            window.next_or_connect()
+            self.assertEqual(window.page, 1)
+        self.spawn.assert_not_called()
+        self.assertFalse(self.directory.exists())
 
     def test_gui_values_preserve_existing_handle_without_a_field(self):
         window = Window.__new__(Window)

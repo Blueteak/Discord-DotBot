@@ -130,7 +130,8 @@ class Window:
         self.controls = []
         if self.page == 0:
             self.step.configure(text='Account')
-            self.entry('Discord user ID', self.owner)
+            self.entry('Discord user ID - 15 to 20 digits', self.owner)
+            self.label('Use Copy User ID, not your @handle.', help=True)
             if self.controller.saved_token and not self.replacing_token:
                 self.label('Token saved privately.', help=True)
                 self.button('Replace token', self.replace_token)
@@ -191,7 +192,13 @@ class Window:
         if self.controller.busy or self.closing or time.monotonic() < self.connect_after:
             return
         if self.page == 0:
+            from .config import snowflake
             from .launcher import validate_input
+            try:
+                snowflake(self.owner.get())
+            except ValueError:
+                self.status.set('Use a 15 to 20 digit user ID, not your @handle.')
+                return
             try:
                 settings = dict(self.values(), scope='accessible', guild_ids=[], channel_ids=[])
                 validate_input(settings, self.secret.get(), self.controller.saved_token)
