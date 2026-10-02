@@ -60,6 +60,29 @@ Copy the **Install Link** from the Installation page and open it. Select your se
 
 Confirm the bot appears in the server's member list. It will remain offline until the relay is running.
 
+## Native launcher on Dot’s cloud desktop
+
+After completing the Discord setup above, ask Dot to install this project on its cloud desktop and open the native launcher:
+
+```sh
+dotbot --data-dir /workspace/shared/discord-dotbot-data gui
+```
+
+Open that cloud computer view in Codex to interact with the window yourself. The app uses large text, fields and buttons for a phone viewing the remote desktop. Opening it never connects or saves anything.
+
+1. Enter your stable **Discord user ID**. A handle is optional and is display-only.
+2. Paste the bot token into the **hidden** field yourself. Keep it out of chat. An existing saved token is never displayed; use **Replace saved token** only when needed.
+3. Select **Next**, choose accessible channels or specific IDs, and click **Connect / Start relay**. That click saves the settings privately and starts the connection. Enable the proxy checkbox only if the host requires its HTTP proxy environment.
+4. Ask Dot to keep **one active watcher** running against the same data folder. “Discord relay connected” confirms only the Discord connection, not an active Dot watcher.
+
+**Stop relay** ends the relay started by this window. Closing the window also stops that relay and waits for it to exit; after five seconds it can force-stop an unresponsive child. Reopening the app never reconnects automatically. If the window process crashes, closing its private pipe stops the child. An uncertain in-flight reply is not automatically resent after restart; inspect Discord before retrying. Another relay using this data folder is not stopped or reconfigured by the app.
+
+The default private folder is `~/.discord-dotbot`; `--data-dir` or `DOTBOT_DATA_DIR` selects another folder. Use a folder **outside the Git checkout**. The GUI refuses repository-local storage. Token/config writes use private files and never put the token in process arguments, logs or the window. The launcher ignores `DISCORD_BOT_TOKEN` so it cannot silently override the token you entered or saved. Proxy opt-in resets to off when reopening the app; proxy values are never displayed.
+
+Tkinter is part of many Python distributions, with no extra pip dependency. On Debian/Ubuntu the host may need `python3-tk` for the Python interpreter used by the virtual environment, plus a running graphical desktop. If Tk or a display is missing, the command gives a short installation/display error. The launcher's intended UI target is the Linux cloud desktop. Mac and Windows GUI behavior has not been visually validated; keep using the existing CLI there if needed. No public web server is opened.
+
+The cloud computer must remain running, and Dot needs an active session. The GUI, shared storage and relay do not provide a durable wake-up for a dormant Dot. The [watcher’s source-aware tool and audience rules](docs/watcher.md) still apply unchanged.
+
 ## Install and run
 
 Install Python 3.9+ and Git. Use a maintained Python version for a new installation.

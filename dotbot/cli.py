@@ -63,6 +63,7 @@ def parser():
     retry = commands.add_parser("retry", help="Retry a failed reply.")
     retry.add_argument("id")
     retry.add_argument("--accept-duplicate-risk", action="store_true")
+    commands.add_parser("gui", help="Open the native setup and relay launcher; never auto-connects.")
     commands.add_parser("status", help="Show relay connection and queue counts.")
     return root
 
@@ -105,6 +106,9 @@ def main():
     args.data_dir = args.data_dir.expanduser().resolve()
     store = None
     try:
+        if args.command == "gui":
+            from .gui import main as gui_main
+            sys.exit(gui_main(args.data_dir))
         if args.command == "setup":
             result = setup(args)
         else:

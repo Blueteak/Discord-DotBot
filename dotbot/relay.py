@@ -304,8 +304,9 @@ class Relay(discord.Client):
         await super().close()
 
 
-def run(config, store, directory, token, serve=None, proxy_from_env=False):
-    with relay_lock(directory):
+def run(config, store, directory, token, serve=None, proxy_from_env=False, *, _lock_held=False):
+    # Native launcher holds this same lock across configuration and startup.
+    with contextlib.nullcontext() if _lock_held else relay_lock(directory):
         store.heartbeat(False)
         store.set_access([])
         store.recover()
