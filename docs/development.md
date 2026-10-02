@@ -18,6 +18,10 @@ Reply states are `pending`, `queued`, `sending`, `sent`, `failed`, and `uncertai
 
 Use `show` to inspect a request. `retry` requeues a definite failure. For an uncertain send, inspect Discord first, then use `retry --accept-duplicate-risk` only if another send is appropriate. MCP does not expose this override.
 
+## Active local watcher
+
+`dotbot run` plus one active session calling `dotbot watch` is the local path; see [lifecycle and safety](watcher.md). The bounded wait reads the durable pending queue without consuming it, filters current scope, and excludes handled work. A separate OS lock prevents overlapping waits, not overlapping assistant processing after return. Existing atomic reply/skip and outbox claims guard duplicate submission/delivery. This path makes no dormant-session wake promise.
+
 ## MCP Events
 
 `dotbot serve` runs Discord and the authenticated `/mcp` endpoint in one process. It implements MCP version `2026-07-28`, including `server/discover`, `tools/list`, `tools/call`, `events/list`, `events/subscribe`, and `events/unsubscribe`.

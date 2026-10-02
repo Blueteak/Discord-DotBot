@@ -36,6 +36,8 @@ def parser():
     mode = serve.add_mutually_exclusive_group()
     mode.add_argument("--dev", action="store_true", help="Loopback-only bearer auth for local tests.")
     mode.add_argument("--local", action="store_true", help="Loopback-only MCP for a trusted local client or secure tunnel. Local processes can access it.")
+    watch = commands.add_parser("watch", help="Wait for pending work in an active local assistant session.")
+    watch.add_argument("--timeout", type=int, choices=range(1, 61), default=50, metavar="1..60")
     inbox = commands.add_parser("inbox", help="Read requests as JSON without consuming them.")
     inbox.add_argument("--status", choices=["pending", "queued", "sending", "sent", "failed", "uncertain", "skipped", "all"], default="pending")
     inbox.add_argument("--limit", type=int, choices=range(1, 501), default=50, metavar="1..500")
@@ -79,8 +81,8 @@ def setup(args):
     config.save(args.data_dir, settings, read_token(args))
     return {"configured": True, "data_dir": str(args.data_dir.resolve()),
             "listen": settings["listen"], "audience": settings["audience"],
-            "next": "Enable Message Content Intent in Discord, then run dotbot serve --local."
-                    if settings["listen"] == "channels" else "Run dotbot serve --local."}
+            "next": "Enable Message Content Intent in Discord, then run dotbot run."
+                    if settings["listen"] == "channels" else "Run dotbot run."}
 
 
 def main():
@@ -114,7 +116,10 @@ def main():
                 logging.getLogger("discord").setLevel(logging.CRITICAL)
                 run(settings, store, args.data_dir, config.token(args.data_dir), args if args.command == "serve" else None)
                 return
-            if args.command == "inbox":
+            if args.command == "watch":
+                from .watcher import wait
+                result = wait(store, settings, args.data_dir, args.timeout)
+            elif args.command == "inbox":
                 result = store.list(args.status, args.limit)
             elif args.command == "show":
                 result = store.get(args.id)

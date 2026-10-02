@@ -2,17 +2,17 @@
 
 A self-hosted Discord bot for talking to your OpenAI Dot from the Discord servers you choose.
 
-Each user runs their own relay on an always-on machine and invites their Discord bot to their servers. The relay stores incoming messages, notifies Dot through MCP Events, and sends Dot's replies back to the originating conversation.
+Each user runs their own relay on an always-on machine and invites their Discord bot to their servers. The relay stores incoming messages and sends Dot's replies back to the originating conversation. One active Dot watcher waits on the local queue; MCP Events are an optional separate connection path.
 
 ## How it works
 
 ```text
-Discord ↔ CLI server + SQLite ↔ MCP tools/events ↔ Dot
+Discord ↔ relay + SQLite ↔ one active Dot watcher
 ```
 
 Choose the servers and channels the bot may read. New setups receive messages from people in those channels without requiring @mentions. Dot can read recent stored context, reply, or skip a message. Bot and webhook messages are ignored. Threads must be enabled by their own channel ID.
 
-New messages wake the callback worker immediately. Dot reads the message and context to decide whether it is directed at it. For those messages, Dot calls `begin_reply` before doing further work, showing the bot's typing indicator for up to two minutes. Other messages are skipped silently. Typing stops refreshing after a reply, skip, or delivery failure; Discord lets the indicator expire naturally after refreshes stop.
+In the optional MCP Events mode, new messages notify the callback worker immediately; this does not guarantee immediate or durable Dot wake-up. Dot reads the message and context to decide whether it is directed at it. For those messages, Dot calls `begin_reply` before doing further work, showing the bot's typing indicator for up to two minutes. Other messages are skipped silently. Typing stops refreshing after a reply, skip, or delivery failure; Discord lets the indicator expire naturally after refreshes stop.
 
 The computer must stay awake and connected. State survives relay restarts. Messages sent while the bot is offline are not backfilled.
 
@@ -71,7 +71,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install .
 dotbot setup
-dotbot serve --local
+dotbot run
 ```
 
 On Windows, use `py -m venv .venv` and `.venv\Scripts\Activate.ps1` instead of the two environment commands. The Windows path is implemented but has not been tested on Windows. On macOS/Linux, `./setup.sh` also installs the app.
@@ -83,6 +83,12 @@ To copy IDs, enable **User Settings → Advanced → Developer Mode** in Discord
 `serve --local` runs Discord and MCP at `http://127.0.0.1:8765/mcp`. It trusts local clients, including a locally running secure tunnel client. It cannot bind to a public interface. Do not expose this unauthenticated mode through a public reverse proxy. Dot connectivity is a separate step; see [connecting Dot](docs/hosting.md).
 
 Use `dotbot run` for Discord and local CLI access without an HTTP endpoint. Stop either command with Ctrl+C. The relay reconnects after network interruptions and prevents a second process from using the same data directory.
+
+## Connect your active Dot
+
+On a host where Dot can run local commands, use [the single-watcher guide](docs/watcher.md). After setup, keep `dotbot run` running and have one active Dot session call `dotbot watch`, handle the result, and repeat. No tunnel, public endpoint, OpenAI API key, or separate response model is needed for this local path.
+
+A local process cannot by itself wake a dormant Dot. If your Dot cannot access this host or remain in an active waiting session, this path is unavailable; use the separately configured MCP path and its platform-dependent lifecycle.
 
 ## Agent setup and token replacement
 
