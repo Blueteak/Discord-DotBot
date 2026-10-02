@@ -86,8 +86,7 @@ def setup(args):
         raise ValueError("Accessible scope uses Discord permissions; omit --guilds and --channels.")
     settings = config.validate({
         "owner_id": args.owner or input("Your Discord user ID (Copy User ID): "),
-        "owner_handle": args.owner_handle if args.owner_handle is not None else
-                        (input("Your Discord handle (optional, display only): ") if sys.stdin.isatty() else ""),
+        "owner_handle": args.owner_handle or "",
         "guild_ids": (args.guilds or input("Server IDs, comma-separated: ")).split(",") if args.scope == "scoped" else [],
         "channel_ids": (args.channels or input("Channel or thread IDs, comma-separated: ")).split(",") if args.scope == "scoped" else [],
         "scope": args.scope,

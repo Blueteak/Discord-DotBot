@@ -32,6 +32,9 @@ class LayoutTests(unittest.TestCase):
                                 window.render()
                                 window.status.set(FAILURE)
                                 root.update_idletasks()
+                                if page == 0:
+                                    labels = [str(w.cget('text')) for w in window.body.winfo_children() if isinstance(w, ttk.Label)]
+                                    self.assertFalse(any('handle' in text.lower() for text in labels))
                                 self.assertLessEqual(window.body.winfo_reqheight(), window.body.winfo_height(), (size, page, scope))
                                 for widget in window.body.winfo_children():
                                     self.assertGreaterEqual(widget.winfo_y(), 0)

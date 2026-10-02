@@ -259,6 +259,17 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(window.page, 1)
         self.spawn.assert_not_called()
 
+    def test_gui_values_preserve_existing_handle_without_a_field(self):
+        window = Window.__new__(Window)
+        window.controller = self.controller()
+        window.controller.settings = dict(SETTINGS)
+        for name, value in (("owner", SETTINGS['owner_id']), ("scope", 'accessible'),
+                            ("guilds", ''), ("channels", ''), ("listen", False), ("audience", False)):
+            setattr(window, name, Mock(get=Mock(return_value=value)))
+        self.assertFalse(hasattr(window, 'handle'))
+        self.assertEqual(window.values()['owner_handle'], SETTINGS['owner_handle'])
+        self.assertEqual(window.values()['owner_id'], SETTINGS['owner_id'])
+
     def test_window_close_requests_stop_and_waits(self):
         window = Window.__new__(Window)
         window.controller = self.controller()

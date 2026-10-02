@@ -196,6 +196,15 @@ class AccessibleTests(unittest.IsolatedAsyncioTestCase):
                                   "channel_ids": ["100000000000003"]})
         self.assertEqual((legacy["scope"], legacy["audience"], legacy["listen"]), ("scoped", "owner", "mentions"))
 
+    def test_interactive_setup_prompts_for_id_but_not_handle(self):
+        args = parser().parse_args(["--data-dir", str(self.path), "setup", "--scope", "accessible"])
+        with patch("sys.stdin.isatty", return_value=True), \
+                patch("builtins.input", return_value=GLOBAL["owner_id"]) as prompt, \
+                patch("dotbot.cli.read_token", return_value="synthetic-secret"):
+            setup(args)
+        prompt.assert_called_once_with("Your Discord user ID (Copy User ID): ")
+        self.assertEqual(config.load(self.path)["owner_handle"], "")
+
     def test_owner_identity_ignores_handle(self):
         settings = dict(GLOBAL, owner_handle="owner-name")
         impostor = {"author_id": "500", "author_name": "owner-name", "is_owner": True}

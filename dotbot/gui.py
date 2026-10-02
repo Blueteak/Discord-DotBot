@@ -57,7 +57,6 @@ class Window:
         style.map('Primary.TButton', background=[('disabled', '#7c8ca8'), ('active', '#19499e')])
         settings = controller.settings
         self.owner = tk.StringVar(value=settings['owner_id'])
-        self.handle = tk.StringVar(value=settings.get('owner_handle', ''))
         self.secret = tk.StringVar()
         self.scope = tk.StringVar(value=settings['scope'])
         self.guilds = tk.StringVar(value=', '.join(settings['guild_ids']))
@@ -132,7 +131,6 @@ class Window:
         if self.page == 0:
             self.step.configure(text='Account')
             self.entry('Discord user ID', self.owner)
-            self.entry('Handle (optional, display only)', self.handle)
             if self.controller.saved_token and not self.replacing_token:
                 self.label('Token saved privately.', help=True)
                 self.button('Replace token', self.replace_token)
@@ -184,7 +182,7 @@ class Window:
         self.navigate(0 if self.page == 1 else 1)
 
     def values(self):
-        return dict(self.controller.settings, owner_id=self.owner.get().strip(), owner_handle=self.handle.get().strip(),
+        return dict(self.controller.settings, owner_id=self.owner.get().strip(),
                     scope=self.scope.get(), guild_ids=[v.strip() for v in self.guilds.get().split(',') if v.strip()] if self.scope.get() == 'scoped' else [],
                     channel_ids=[v.strip() for v in self.channels.get().split(',') if v.strip()] if self.scope.get() == 'scoped' else [],
                     listen='mentions' if self.listen.get() else 'channels', audience='owner' if self.audience.get() else 'channel')
