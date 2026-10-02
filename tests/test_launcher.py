@@ -218,10 +218,12 @@ class LauncherTests(unittest.TestCase):
         window.root.destroy.assert_called_once()
 
     def test_repository_data_and_corrupt_config_rejected(self):
-        (Path(self.tmp.name)/'.git').mkdir()
+        (Path(self.tmp.name)/'dotbot').mkdir()
+        (Path(self.tmp.name)/'dotbot'/'cli.py').touch()
+        (Path(self.tmp.name)/'pyproject.toml').touch()
         with self.assertRaises(LauncherError):
             self.controller()
-        (Path(self.tmp.name)/'.git').rmdir()
+        (Path(self.tmp.name)/'pyproject.toml').unlink()
         self.directory.mkdir()
         (self.directory/'config.json').write_text('invalid ' + SECRET)
         app = self.controller()
@@ -229,6 +231,36 @@ class LauncherTests(unittest.TestCase):
         with self.assertRaises(LauncherError):
             app.connect(SETTINGS, SECRET)
         self.spawn.assert_not_called()
+
+    def test_platform_git_parent_allows_external_ignored_runtime(self):
+        repository = Path(self.tmp.name)
+        subprocess.run(['git', 'init', '-q', str(repository)], check=True)
+        app = self.controller()
+        self.assertFalse(self.directory.exists())  # Opening still has no writes.
+        with patch('dotbot.gui_worker.run'):
+            launch(self.directory, dict(settings=SETTINGS, secret=SECRET))
+        paths = ['token', 'config.json', 'relay.sqlite', 'relay.sqlite-wal', '.dotbot-future', 'relay.lock', '.gitignore']
+        result = subprocess.run(['git', '-C', str(repository), 'check-ignore', '--stdin'],
+            input='\n'.join('private/' + name for name in paths) + '\n', text=True, capture_output=True, check=True)
+        self.assertEqual(len(result.stdout.splitlines()), len(paths))
+        subprocess.run(['git', '-C', str(repository), 'add', '.'], check=True)
+        tracked = subprocess.run(['git', '-C', str(repository), 'ls-files'], capture_output=True, text=True, check=True)
+        self.assertEqual(tracked.stdout, '')
+        self.assertTrue((repository/'.git').is_dir())
+        self.assertFalse((repository/'.gitignore').exists())
+        self.assertTrue(self.controller().saved_token)
+
+    def test_platform_parent_rejects_previously_tracked_runtime(self):
+        repository = Path(self.tmp.name)
+        subprocess.run(['git', 'init', '-q', str(repository)], check=True)
+        self.directory.mkdir()
+        (self.directory/'config.json').write_text('{}')
+        subprocess.run(['git', '-C', str(repository), 'add', 'private/config.json'], check=True)
+        with self.assertRaises(LauncherError):
+            self.controller()
+        with self.assertRaises(LauncherError), patch('dotbot.gui_worker.run'):
+            launch(self.directory, dict(settings=SETTINGS, secret=SECRET))
+        self.assertFalse((self.directory/'token').exists())
 
     def test_failure_exit_status_is_generic(self):
         app = self.controller()

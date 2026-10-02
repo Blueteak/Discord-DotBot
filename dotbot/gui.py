@@ -21,7 +21,7 @@ def main(directory):
         controller = Launcher(directory)
     except Exception:
         root.destroy()
-        print('Cannot open the private data folder. Use --data-dir outside a Git checkout.', file=sys.stderr)
+        print('Cannot open the private data folder. Use an untracked --data-dir outside the Discord app source tree.', file=sys.stderr)
         return 1
     Window(root, controller, tk, ttk)
     root.mainloop()

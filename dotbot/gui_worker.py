@@ -20,6 +20,9 @@ def launch(directory, payload):
     config.private_directory(directory)
     # Own the existing relay lock before saving anything; hold it through run().
     with relay_lock(directory):
+        # Protect the entire dedicated runtime folder, including new SQLite
+        # sidecars and atomic-write temporary files, before saving any secret.
+        config.private_write(directory / '.gitignore', '*\n')
         secret = payload.pop('secret', '')
         if secret:
             config.private_write(directory / 'token', secret + '\n')

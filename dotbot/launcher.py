@@ -21,8 +21,24 @@ class LauncherError(ValueError):
 
 def data_directory(path):
     directory = Path(path).expanduser().resolve()
-    if any((parent / '.git').exists() for parent in (directory, *directory.parents)):
-        raise LauncherError('Choose a private data folder outside any Git checkout with --data-dir.')
+    parents = (directory, *directory.parents)
+    # Cloud hosts may version their workspace root. That metadata does not make
+    # every external runtime directory part of this application's source tree.
+    if any((parent / 'dotbot' / 'cli.py').is_file() and (parent / 'pyproject.toml').is_file()
+           for parent in parents):
+        raise LauncherError('Choose a private data folder outside the Discord app source tree with --data-dir.')
+    repository = next((parent for parent in parents if (parent / '.git').exists()), None)
+    if repository:
+        env = dict(os.environ)
+        for key in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE'):
+            env.pop(key, None)
+        try:
+            tracked = subprocess.run(['git', '-C', str(repository), 'ls-files', '-z', '--', str(directory)],
+                                     capture_output=True, timeout=5, env=env)
+        except (OSError, subprocess.TimeoutExpired):
+            raise LauncherError('Cannot verify that the private data folder is untracked by Git.') from None
+        if tracked.returncode or tracked.stdout:
+            raise LauncherError('Choose an untracked private data folder; existing tracked files cannot hold credentials.')
     return directory
 
 
