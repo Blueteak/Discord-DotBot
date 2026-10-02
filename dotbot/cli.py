@@ -29,8 +29,11 @@ def parser():
     configure.add_argument("--audience", choices=["channel", "owner"])
     credential = commands.add_parser("token", help="Replace the bot token using a hidden prompt or private file.")
     credential.add_argument("--token-file", type=Path)
-    commands.add_parser("run", help="Run the Discord connection in the foreground.")
+    runner = commands.add_parser("run", help="Run the Discord connection in the foreground.")
     serve = commands.add_parser("serve", help="Run Discord and the MCP Events endpoint together.")
+    for command in (runner, serve):
+        command.add_argument("--proxy-from-env", action="store_true",
+                             help="Use HTTPS_PROXY or https_proxy for Discord REST and Gateway connections.")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8765)
     mode = serve.add_mutually_exclusive_group()
@@ -114,7 +117,8 @@ def main():
                 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
                 # Library logs may include request details. Keep routine logs to our own IDs/status.
                 logging.getLogger("discord").setLevel(logging.CRITICAL)
-                run(settings, store, args.data_dir, config.token(args.data_dir), args if args.command == "serve" else None)
+                run(settings, store, args.data_dir, config.token(args.data_dir), args if args.command == "serve" else None,
+                    proxy_from_env=args.proxy_from_env)
                 return
             if args.command == "watch":
                 from .watcher import wait
@@ -139,16 +143,19 @@ def main():
         print(json.dumps(result, indent=2))
     except KeyboardInterrupt:
         pass
-    except FileNotFoundError as exc:
-        missing = Path(exc.filename).name if exc.filename else "configuration"
-        print(json.dumps({"error": f"Missing {missing} in {args.data_dir}. Run dotbot setup first; use serve --local for local MCP or configure mcp.json for OAuth."}), file=sys.stderr)
-        sys.exit(1)
-    except (ValueError, KeyError, OSError, EOFError) as exc:
-        print(json.dumps({"error": str(exc)}), file=sys.stderr)
-        sys.exit(1)
     except Exception as exc:
-        # Do not expose tokens or message bodies via third-party exception strings.
-        print(json.dumps({"error": f"{type(exc).__name__}: relay failed. Check token, permissions, and network."}), file=sys.stderr)
+        if args.command in ("run", "serve"):
+            # Startup/network exceptions can embed proxy credentials, even in
+            # OSError, ValueError, or FileNotFoundError.filename. Never echo them.
+            error = "Relay failed. Check configuration, token, permissions, proxy, and network."
+        elif isinstance(exc, FileNotFoundError):
+            missing = Path(exc.filename).name if exc.filename else "configuration"
+            error = f"Missing {missing} in {args.data_dir}. Run dotbot setup first; use serve --local for local MCP or configure mcp.json for OAuth."
+        elif isinstance(exc, (ValueError, KeyError, OSError, EOFError)):
+            error = str(exc)
+        else:
+            error = f"{type(exc).__name__}: relay failed. Check token, permissions, and network."
+        print(json.dumps({"error": error}), file=sys.stderr)
         sys.exit(1)
     finally:
         if store:

@@ -90,6 +90,14 @@ On a host where Dot can run local commands, use [the single-watcher guide](docs/
 
 A local process cannot by itself wake a dormant Dot. If your Dot cannot access this host or remain in an active waiting session, this path is unavailable; use the separately configured MCP path and its platform-dependent lifecycle.
 
+## Hosts requiring an outbound proxy
+
+If your host already provides an HTTP CONNECT proxy in `HTTPS_PROXY` (or lowercase `https_proxy`), opt in with `dotbot run --proxy-from-env`. The flag also works with `serve`. It passes the proxy through discord.py's public `proxy` and `proxy_auth` options for both Discord REST and Gateway WebSocket connections. Normal launches ignore these variables and keep the direct-connection default.
+
+The variable must contain an `http://` proxy URL; optional URL-encoded Basic Auth credentials are supported. Supply it through the host's private environment, never chat or command-line arguments. A nonempty uppercase value takes precedence; an empty or missing uppercase value falls back to lowercase. Missing or invalid values fail without printing the value. HTTPS-to-proxy and SOCKS URLs are unsupported; the HTTP proxy must permit CONNECT to Discord HTTPS and WSS destinations. This flag does not configure MCP callback traffic, honor `NO_PROXY`, or change system networking, certificates, or security settings.
+
+For a cloud/shared workspace, the relay and watcher must run in that same accessible environment. Keep credentials and the SQLite data directory outside the checkout, and use the same `--data-dir` for every command. Shared workspace availability does not guarantee persistent processes or storage: on session shutdown, automatic replies stop; queued state survives only if its storage persists. Confirm no other host is running the same bot before starting. A cloud trial is not an always-on deployment.
+
 ## Agent setup and token replacement
 
 Agents can configure the app without an interactive prompt:
