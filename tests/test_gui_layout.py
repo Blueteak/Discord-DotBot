@@ -41,7 +41,7 @@ class LayoutTests(unittest.TestCase):
                                     labels = [str(w.cget('text')) for w in window.body.winfo_children() if isinstance(w, ttk.Label)]
                                     checks = [str(w.cget('text')) for w in window.body.winfo_children() if isinstance(w, ttk.Checkbutton)]
                                     self.assertIn('Use this computer’s network proxy', checks)
-                                    self.assertIn('Routes Discord traffic through this computer’s configured gateway.\nRequired on Dot’s cloud computer. Usually off on your own computer.', labels)
+                                    self.assertIn('Uses this computer’s network gateway.\nRequired in Dot’s cloud; usually off on your own computer.', labels)
                                     self.assertFalse(window.proxy.get())
                                 self.assertLessEqual(window.body.winfo_reqheight(), window.body.winfo_height(), (size, page, scope))
                                 for widget in window.body.winfo_children():
