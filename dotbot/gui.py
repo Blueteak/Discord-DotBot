@@ -149,7 +149,7 @@ class Window:
             self.label('Follows Discord permissions, including new channels.' if self.scope.get() == 'accessible'
                        else 'Enter server and channel IDs on the next page.', help=True)
             self.check('Use this computer’s network proxy', self.proxy)
-            self.label('Uses this computer’s network gateway.\nRequired in Dot’s cloud; usually off on your own computer.', help=True)
+            self.label('Uses this computer’s network gateway.\nRequired in Dot’s cloud; usually off on your own computer.', help=True).pack_configure(pady=0)
             self.button('Message options', self.show_preferences)
             self.label('Connect saves settings and starts the relay.', help=True)
             self.action.configure(text='Connect' if self.scope.get() == 'accessible' else 'Next')
