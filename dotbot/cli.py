@@ -60,8 +60,22 @@ def parser():
     reply = commands.add_parser("reply", help="Queue one reply. Read text from stdin or --file.")
     reply.add_argument("id")
     reply.add_argument("--file", type=Path)
+    followup = commands.add_parser("followup", help="Queue an intentional follow-up after a confirmed reply.")
+    followup.add_argument("id")
+    followup.add_argument("--key", required=True, help="Stable operation key; reuse for the same follow-up, never for different text.")
+    followup.add_argument("--file", type=Path)
+    send = commands.add_parser("send", help="Queue an owner-authorized standalone message to an explicit allowed channel.")
+    send.add_argument("channel_id")
+    send.add_argument("--key", required=True)
+    send.add_argument("--file", type=Path)
+    operation = commands.add_parser("operation", help="Inspect an outbound operation.")
+    operation.add_argument("operation_id")
+    retry_operation = commands.add_parser("retry-operation", help="Retry a failed outbound operation.")
+    retry_operation.add_argument("operation_id")
+    retry_operation.add_argument("--accept-duplicate-risk", action="store_true")
     retry = commands.add_parser("retry", help="Retry a failed reply.")
     retry.add_argument("id")
+    retry.add_argument("--followup-key", help="Retry this follow-up instead of the original reply.")
     retry.add_argument("--accept-duplicate-risk", action="store_true")
     commands.add_parser("gui", help="Open the native setup and relay launcher; never auto-connects.")
     commands.add_parser("status", help="Show relay connection and queue counts.")
@@ -158,8 +172,22 @@ def main():
                 text = args.file.read_text() if args.file else sys.stdin.read()
                 row = store.reply(args.id, text)
                 result = {"id": args.id, "status": row["status"]}
+            elif args.command == "send":
+                text = args.file.read_text() if args.file else sys.stdin.read()
+                result = store.send(settings, args.channel_id, args.key, text)
+            elif args.command == "operation":
+                result = store.operation(settings, args.operation_id)
+            elif args.command == "retry-operation":
+                store.retry_operation(settings, args.operation_id, args.accept_duplicate_risk)
+                result = store.operation(settings, args.operation_id)
+            elif args.command == "followup":
+                text = args.file.read_text() if args.file else sys.stdin.read()
+                result = store.followup(args.id, args.key, text)
             elif args.command == "retry":
-                store.retry(args.id, args.accept_duplicate_risk)
+                if args.followup_key:
+                    store.retry_followup(args.id, args.followup_key, args.accept_duplicate_risk)
+                else:
+                    store.retry(args.id, args.accept_duplicate_risk)
                 result = {"id": args.id, "status": "queued"}
             else:
                 result = store.health()

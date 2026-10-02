@@ -171,3 +171,5 @@ Attachments, edits, direct messages, history import, and slash commands are not 
 See [hosting](docs/hosting.md), [implementation notes](docs/development.md), and the earlier [Sites experiment](docs/sites-probe.md).
 
 Community project. Not affiliated with OpenAI or Discord.
+
+For intentional follow-ups after a confirmed reply, use `dotbot followup`. For owner-authorized standalone updates to an explicit allowed channel, use `dotbot send`. Both require stable operation keys; see [delivery and recovery workflow](docs/watcher.md#intentional-follow-up-replies).

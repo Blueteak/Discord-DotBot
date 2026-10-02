@@ -110,10 +110,9 @@ class Relay(discord.Client):
             return False
 
     def refresh_access(self):
-        if self.config.get("scope") == "accessible":
-            self.store.set_access((guild.id, channel.id) for guild in self.guilds
-                                  for channel in [*guild.channels, *guild.threads]
-                                  if self.channel_accessible(channel))
+        self.store.set_access((guild.id, channel.id) for guild in self.guilds
+                              for channel in [*guild.channels, *guild.threads]
+                              if self.channel_accessible(channel))
 
     async def on_guild_channel_update(self, before, after):
         self.refresh_access()
@@ -247,21 +246,32 @@ class Relay(discord.Client):
             self.typing_tasks.pop(channel_id, None)
 
     async def send_request(self, request):
+        def finish(status, **kwargs):
+            self.store.finish(request["id"], status, operation_id=request.get("operation_id"), **kwargs)
+
+        if request.get("id") is None:
+            try:
+                destination = self.store.destination(self.config, request["channel_id"])
+                if destination["guild_id"] != request["guild_id"]:
+                    raise ValueError("Destination server changed.")
+            except ValueError:
+                finish("failed", error="Destination no longer permitted or permission snapshot stale.")
+                return
         if not self.store.visible(self.config, request):
-            self.store.finish(request["id"], "failed", error="Destination no longer permitted by configuration.")
+            finish("failed", error="Destination no longer permitted by configuration.")
             return
         try:
             channel = self.get_channel(int(request["channel_id"])) or await self.fetch_channel(int(request["channel_id"]))
             if str(getattr(getattr(channel, "guild", None), "id", None)) != request["guild_id"]:
-                self.store.finish(request["id"], "failed", error="Channel does not belong to the stored server.")
+                finish("failed", error="Channel does not belong to the stored server.")
                 return
-            if self.config.get("scope") == "accessible" and not self.channel_accessible(channel):
+            if (request.get("operation_id") or self.config.get("scope") == "accessible") and not self.channel_accessible(channel):
                 self.store.revoke_access(channel.id)
-                self.store.finish(request["id"], "failed", error="Channel access is no longer available.")
+                finish("failed", error="Channel access is no longer available.")
                 return
             reference = discord.MessageReference(message_id=int(request["id"]),
-                channel_id=int(request["channel_id"]), guild_id=int(request["guild_id"]), fail_if_not_exists=True)
-            sent = await channel.send(request["reply"], reference=reference, nonce=request["id"],
+                channel_id=int(request["channel_id"]), guild_id=int(request["guild_id"]), fail_if_not_exists=True) if request["id"] else None
+            sent = await channel.send(request["reply"], reference=reference, nonce=request.get("operation_id", request["id"])[:25],
                                       allowed_mentions=discord.AllowedMentions.none())
         except Exception as exc:
             # A network failure can happen after Discord accepted the message.
@@ -271,11 +281,11 @@ class Relay(discord.Client):
                 self.store.revoke_access(request["channel_id"])
             details = delivery_error(exc, request, self.http.token, self.proxy_secrets)
             error = details if status == "failed" else f"Delivery not confirmed. {details}. Check Discord before retrying."
-            self.store.finish(request["id"], status, error=error)
+            finish( status, error=error)
             log.warning("Reply %s for request %s in channel %s: %s", status,
                         request["id"], request["channel_id"], details)
         else:
-            self.store.finish(request["id"], "sent", reply_id=str(sent.id))
+            finish("sent", reply_id=str(sent.id))
             log.info("Delivered reply for %s", request["id"])
 
     async def deliver(self):

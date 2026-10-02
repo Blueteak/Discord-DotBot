@@ -1,3 +1,5 @@
+import re
+import uuid
 import sqlite3
 import time
 
@@ -22,6 +24,15 @@ class Store:
                 reply TEXT,
                 reply_id TEXT,
                 error TEXT
+            );
+            CREATE TABLE IF NOT EXISTS outbound (
+                operation_id TEXT PRIMARY KEY, request_id TEXT,
+                guild_id TEXT, channel_id TEXT, author_id TEXT,
+                destination_key TEXT NOT NULL,
+                operation_key TEXT NOT NULL, reply TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued', created_at REAL NOT NULL,
+                reply_id TEXT, error TEXT, reply_sent_at REAL,
+                UNIQUE(destination_key, operation_key)
             );
             CREATE TABLE IF NOT EXISTS channel_access (
                 channel_id TEXT PRIMARY KEY, guild_id TEXT NOT NULL,
@@ -136,7 +147,79 @@ class Store:
         result["callback_attempts"] = [dict(attempt) for attempt in self.db.execute(
             "SELECT event_id, started_at, completed_at, duration_ms, http_status, error_type "
             "FROM callback_attempts WHERE request_id=? ORDER BY id", (request_id,))]
+        result["followups"] = [dict(row) for row in self.db.execute(
+            "SELECT * FROM outbound WHERE request_id=? ORDER BY created_at, operation_id", (request_id,))]
         return result
+
+    @staticmethod
+    def validate_operation(operation_key, text):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", operation_key):
+            raise ValueError("Operation key must be 1–128 ASCII letters, digits, dots, underscores, colons or hyphens.")
+        if not text.strip() or len(text.encode("utf-16-le")) // 2 > 2000:
+            raise ValueError("Reply must contain 1–2000 Discord characters.")
+
+    def followup(self, request_id, operation_key, text):
+        self.validate_operation(operation_key, text)
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            parent = self.get(request_id)
+            if parent["status"] != "sent":
+                raise ValueError("Follow-ups require an initial confirmed sent reply.")
+            row = self.db.execute("SELECT * FROM outbound WHERE request_id=? AND operation_key=?",
+                                  (request_id, operation_key)).fetchone()
+            if row:
+                if row["reply"] != text:
+                    raise ValueError("Operation key already used with different text.")
+                return dict(row)
+            operation_id = uuid.uuid4().hex
+            self.db.execute("INSERT INTO outbound(operation_id, request_id, destination_key, operation_key, reply, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                            (operation_id, request_id, "reply:" + request_id, operation_key, text, time.time()))
+        return dict(self.db.execute("SELECT * FROM outbound WHERE operation_id=?", (operation_id,)).fetchone())
+
+    def destination(self, settings, channel_id):
+        row = self.db.execute("SELECT guild_id FROM channel_access WHERE channel_id=? AND checked_at>?",
+                              (channel_id, time.time() - 15)).fetchone()
+        if not row or not self.connected() or not allowed(settings, settings["owner_id"], row["guild_id"], channel_id):
+            raise ValueError("Destination is not currently permitted or its permission snapshot is stale.")
+        return {"guild_id": row["guild_id"], "channel_id": channel_id, "author_id": settings["owner_id"]}
+
+    def send(self, settings, channel_id, operation_key, text):
+        self.validate_operation(operation_key, text)
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            destination = self.destination(settings, channel_id)
+            key = "channel:" + channel_id
+            row = self.db.execute("SELECT * FROM outbound WHERE destination_key=? AND operation_key=?", (key, operation_key)).fetchone()
+            if row:
+                if row["reply"] != text:
+                    raise ValueError("Operation key already used with different text.")
+                return dict(row)
+            operation_id = uuid.uuid4().hex
+            self.db.execute("INSERT INTO outbound(operation_id, destination_key, operation_key, reply, created_at, guild_id, channel_id, author_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                            (operation_id, key, operation_key, text, time.time(), destination["guild_id"], channel_id, destination["author_id"]))
+        return self.operation(settings, operation_id)
+
+    def operation(self, settings, operation_id):
+        row = self.db.execute("SELECT * FROM outbound WHERE operation_id=?", (operation_id,)).fetchone()
+        if not row:
+            raise ValueError("Unknown operation ID.")
+        result = dict(row)
+        if result["request_id"]:
+            if not self.visible(settings, self.get(result["request_id"])):
+                raise ValueError("Request is no longer accessible.")
+        else:
+            destination = self.destination(settings, result["channel_id"])
+            if destination["guild_id"] != result["guild_id"]:
+                raise ValueError("Destination server changed.")
+        return result
+
+    def retry_operation(self, settings, operation_id, accept_duplicate_risk=False):
+        self.operation(settings, operation_id)
+        with self.db:
+            result = self.db.execute("UPDATE outbound SET status='queued', error=NULL WHERE operation_id=? AND (status='failed' OR (status='uncertain' AND ?))",
+                                    (operation_id, accept_duplicate_risk))
+        if result.rowcount != 1:
+            raise ValueError("Only failed operations can retry automatically; uncertain delivery requires --accept-duplicate-risk after checking Discord.")
 
     def context(self, request_id, limit=30):
         anchor = self.get(request_id)
@@ -144,7 +227,7 @@ class Store:
             WHERE guild_id=? AND channel_id=? AND received_at<=?
             ORDER BY received_at DESC, id DESC LIMIT ?""",
             (anchor["guild_id"], anchor["channel_id"], anchor["received_at"], limit))
-        return list(reversed([dict(row) for row in rows]))
+        return list(reversed([self.get(row["id"]) for row in rows]))
 
     def skip(self, request_id):
         with self.db:
@@ -185,11 +268,24 @@ class Store:
             self.db.execute("BEGIN IMMEDIATE")
             row = self.db.execute("SELECT * FROM requests WHERE status='queued' ORDER BY received_at LIMIT 1").fetchone()
             if row is None:
-                return None
+                operation = self.db.execute("SELECT * FROM outbound WHERE status='queued' ORDER BY created_at, operation_id LIMIT 1").fetchone()
+                if operation is None:
+                    return None
+                self.db.execute("UPDATE outbound SET status='sending' WHERE operation_id=?", (operation["operation_id"],))
+                if operation["request_id"] is None:
+                    return {**dict(operation), "id": None}
+                parent = self.get(operation["request_id"])
+                delivery = {k: v for k, v in dict(operation).items() if k not in ("guild_id", "channel_id", "author_id")}
+                return {**parent, **delivery, "id": parent["id"]}
             self.db.execute("UPDATE requests SET status='sending' WHERE id=?", (row["id"],))
         return dict(row)
 
-    def finish(self, request_id, status, reply_id=None, error=None):
+    def finish(self, request_id, status, reply_id=None, error=None, operation_id=None):
+        if operation_id is not None:
+            with self.db:
+                self.db.execute("UPDATE outbound SET status=?, reply_id=?, error=?, reply_sent_at=? WHERE request_id IS ? AND operation_id=? AND status='sending'",
+                                (status, reply_id, error, time.time() if status == "sent" else None, request_id, operation_id))
+            return
         with self.db:
             self.db.execute("UPDATE requests SET status=?, reply_id=?, error=?, reply_sent_at=? WHERE id=? AND status='sending'",
                             (status, reply_id, error, time.time() if status == "sent" else None, request_id))
@@ -199,6 +295,15 @@ class Store:
             self.db.execute("""UPDATE requests SET status='uncertain',
                 error='Relay stopped during delivery. Check Discord before retrying.'
                 WHERE status='sending'""")
+
+            self.db.execute("UPDATE outbound SET status='uncertain', error='Relay stopped during delivery. Check Discord before retrying.' WHERE status='sending'")
+
+    def retry_followup(self, request_id, operation_key, accept_duplicate_risk=False):
+        with self.db:
+            result = self.db.execute("UPDATE outbound SET status='queued', error=NULL WHERE request_id=? AND operation_key=? AND (status='failed' OR (status='uncertain' AND ?))",
+                                    (request_id, operation_key, accept_duplicate_risk))
+        if result.rowcount != 1:
+            raise ValueError("Only failed follow-ups can retry automatically; uncertain delivery requires --accept-duplicate-risk after checking Discord.")
 
     def retry(self, request_id, accept_duplicate_risk=False):
         with self.db:
@@ -221,6 +326,8 @@ class Store:
                 "SELECT status, COUNT(*) AS count FROM requests GROUP BY status")},
         }
 
+        result["outbound_counts"] = {r["status"]: r["count"] for r in self.db.execute(
+            "SELECT status, COUNT(*) AS count FROM outbound GROUP BY status")}
         if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='subscriptions'").fetchone():
             result["active_subscriptions"] = self.db.execute(
                 "SELECT COUNT(*) FROM subscriptions WHERE expires>?", (time.time(),)).fetchone()[0]
